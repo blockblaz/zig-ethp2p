@@ -48,6 +48,7 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | [#13](https://github.com/ch4r10t33r/zig-ethp2p/issues/13) | RS abstract mesh: larger graphs & Go scalability alignment |
 | [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) | RLNC and additional EC `Scheme` types |
 | [#15](https://github.com/ch4r10t33r/zig-ethp2p/issues/15) | `UPSTREAM.md` / proto pins / CI Zig version alignment |
+| [#16](https://github.com/ch4r10t33r/zig-ethp2p/issues/16) | Developer task runner (`justfile` / Makefile parity with [ethp2p `justfile`](https://github.com/ethp2p/ethp2p/blob/main/justfile)) |
 
 ## Requirements
 
