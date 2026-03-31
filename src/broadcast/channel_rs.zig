@@ -1,6 +1,8 @@
 //! RS-only broadcast channel: members, sessions, publish (aligned with ethp2p `broadcast/channel.go`).
 //! Ingest: `relayIngestChunk` stores bytes without a hash check; `relayIngestChunkVerified` runs
 //! `RsStrategy.verifyChunk` first so invalid shards never hit the dedup registry or `takeChunk`.
+//! RS `verifyChunk` is synchronous (`.accepted` / `.invalid` only); `.pending` is for other schemes.
+//! Async SHA256 + `takeChunk` matches Go `handleVerifyResult` → `acceptChunk` via `broadcast.relay_async_verify`.
 
 const std = @import("std");
 const broadcast_types = @import("../layer/broadcast_types.zig");
@@ -160,6 +162,16 @@ pub const ChannelRs = struct {
         return slot.*.strategy.decode();
     }
 
+    /// After a successful decode, clears engine `DedupRegistry` keys for this `(channel_id, message_id)`
+    /// when `EngineConfig.enable_cross_session_dedup` is set (no-op otherwise).
+    pub fn sessionDecodeClearEngineDedup(self: *ChannelRs, message_id: []const u8) ![]u8 {
+        const out = try self.sessionDecode(message_id);
+        if (self.engine.dedupRegistryPtr() != null) {
+            self.engine.forgetDedupForMessage(self.id, message_id);
+        }
+        return out;
+    }
+
     pub fn sessionStrategy(self: *ChannelRs, message_id: []const u8) ?*RsStrategy {
         const slot = self.sessions.getPtr(message_id) orelse return null;
         return &slot.*.strategy;
@@ -185,6 +197,18 @@ pub const ChannelRs = struct {
         return strat.takeChunk(peer, chunk_id, data, dedup);
     }
 
+    /// `relayIngestChunk` using the engine-owned registry when cross-session dedup is enabled; otherwise `null`.
+    pub fn relayIngestChunkEngine(
+        self: *ChannelRs,
+        message_id: []const u8,
+        peer: []const u8,
+        chunk_id: rs_strategy.ChunkIdent,
+        data: []const u8,
+        dedup: ?*broadcast_types.DedupCancel,
+    ) (Allocator.Error || error{UnknownMessage})!broadcast_types.ChunkIngestResult {
+        return self.relayIngestChunk(self.engine.dedupRegistryPtr(), message_id, peer, chunk_id, data, dedup);
+    }
+
     /// Like `relayIngestChunk`, but rejects data that fails `verifyChunk` before dedup / `takeChunk`.
     pub fn relayIngestChunkVerified(
         self: *ChannelRs,
@@ -201,6 +225,18 @@ pub const ChannelRs = struct {
             return .{ .verdict = v, .complete = false };
         }
         return self.relayIngestChunk(registry, message_id, peer, chunk_id, data, dedup);
+    }
+
+    /// `relayIngestChunkVerified` with `engine.dedupRegistryPtr()` (see `relayIngestChunkEngine`).
+    pub fn relayIngestChunkVerifiedEngine(
+        self: *ChannelRs,
+        message_id: []const u8,
+        peer: []const u8,
+        chunk_id: rs_strategy.ChunkIdent,
+        data: []const u8,
+        dedup: ?*broadcast_types.DedupCancel,
+    ) (Allocator.Error || error{UnknownMessage})!broadcast_types.ChunkIngestResult {
+        return self.relayIngestChunkVerified(self.engine.dedupRegistryPtr(), message_id, peer, chunk_id, data, dedup);
     }
 };
 
