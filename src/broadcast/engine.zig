@@ -53,6 +53,13 @@ pub const Engine = struct {
         return null;
     }
 
+    /// Clears dedup keys for `(channel_id, message_id)` after decode or session teardown.
+    pub fn forgetDedupForMessage(self: *Engine, channel_id: []const u8, message_id: []const u8) void {
+        if (self.dedup_registry) |*d| {
+            d.forgetMessage(self.allocator, channel_id, message_id);
+        }
+    }
+
     pub fn attachChannelRs(
         self: *Engine,
         channel_id: []const u8,
