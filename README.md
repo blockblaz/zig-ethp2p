@@ -20,24 +20,26 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | RS emit planner (fair dispatch heap) | [`broadcast/rs/emit.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/emit.go) | `layer.emit_planner` |
 | RS parity encode (klauspost-default matrix) | [klauspost/reedsolomon](https://github.com/klauspost/reedsolomon) via ethp2p RS strategy | `layer.rs_encode`, `ReedSolomon`, `decodeMessage` |
 | RS unified strategy (per-session) | [`broadcast/rs/strategy.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/strategy.go) | `layer.rs_strategy` |
-| Abstract RS mesh (strategy-only, same topologies as Go `TestNetwork` RS) | [`sim/scenario_test.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/scenario_test.go) | `sim.rs_mesh`, `zig build simtest` |
+| Abstract RS mesh (strategy-only; includes Go `TestNetwork` topologies 0–1 + 4-node ring) | [`sim/scenario_test.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/scenario_test.go) | `sim.rs_mesh`, `zig build simtest` |
 | Gossipsub sim publish bytes (same layout as Go `encodeGossipsubMessage`) + default topic | [`sim/strategy_gossipsub.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/strategy_gossipsub.go) | `sim.gossipsub_transport` |
 | Abstract topic fanout + per-peer inboxes (no protobuf RPC) | same driver `Publish` / subscribe mesh | `sim.gossipsub_protocol` |
 | Encode + fanout helper | `GossipsubNode.Publish` + topic delivery | `sim.gossipsub_broadcast` |
 | App payload envelope entry point (re-export) | `encodeGossipsubMessage` | `broadcast.gossip` |
-| **Not in scope yet** | libp2p gossipsub host, QUIC simnet wiring, gossipsub protobuf RPC, RLNC | — (see **Pending work** below) |
+| Gossipsim cross-checks (golden envelope, mesh fanout, `broadcast.gossip` vs transport) | — | `sim.gossipsub_interop` |
+| **Not in scope yet** | libp2p gossipsub host, QUIC simnet wiring, gossipsub **protobuf** RPC (IHAVE/IWANT wire), RLNC | — (see **Pending work** below) |
 
 ## Pending work
 
-Items to tackle later; not an exhaustive roadmap.
+What is **in tree today**: wire + layer RS strategy, `broadcast.*` (engine / RS channel / session / `gossip`), abstract RS mesh (2-, 4-, and 6-node cases), and the **gossipsim** stack (`gossipsub_transport`, `gossipsub_protocol`, `gossipsub_broadcast`, `gossipsub_interop`). All of that is covered by `zig build test` (fast CI).
 
-- **Broadcast session stack**: Implemented as `broadcast.*` (engine / RS channel / session); still no parity with full dedup / async verify / multi-scheme from the Go stack.
-- **Gossipsub**: `sim.gossipsub_transport` (envelope), `sim.gossipsub_protocol` (abstract fanout mesh), `sim.gossipsub_broadcast` + `broadcast.gossip` (helpers). No libp2p host, no IHAVE/IWANT **wire** parity with `go-libp2p-pubsub` protobuf.
-- **Go simnet parity**: No integration with **[marcopolo/simnet](https://github.com/marcopolo/simnet)** / libp2p / QUIC. Abstract mesh tests deliberately avoid UDP and real latency; a future step is driving **this** library from a real network sim or FFI if we need byte-identical timing traces.
-- **Large / stress scenarios**: Go CI runs `TestLargeNetwork_RS` and `TestScalability` on `main` only; Zig has no equivalent long-run or scale tests yet.
-- **RLNC and other schemes**: Reference may grow beyond RS; RLNC and additional `broadcast.Scheme` implementations are out of tree.
-- **Async verification**: Reference `Strategy.Verified()` / `VerifyResult` channels are not modeled; `DedupCancel` in Zig uses a minimal callback shape.
-- **Docs / ops**: Expand `UPSTREAM.md` when protos or golden vectors change; keep `minimum_zig_version` and CI `ZIG_VERSION` in sync.
+What is **still open** (not exhaustive):
+
+- **Broadcast parity with Go**: No full dedup groups, `Strategy.Verified()` / async verify, or multi-scheme (RLNC, etc.) like the reference `broadcast/` stack.
+- **Real gossipsub / simnet**: No **[marcopolo/simnet](https://github.com/marcopolo/simnet)** or libp2p host; no QUIC timing. Abstract tests only.
+- **Gossipsub protobuf RPC**: IHAVE/IWANT (and friends) as in `go-libp2p-pubsub` are not encoded/decoded in Zig.
+- **Large-network RS stress**: Go runs `TestLargeNetwork_RS` / `TestScalability` on `main` only; Zig does not yet mirror those long or huge topologies in default CI (the 6-node abstract mesh is already heavy enough for a quick run).
+- **RLNC and other EC schemes**: Out of tree until the reference grows them and we add Zig analogues.
+- **Docs / ops**: Keep `UPSTREAM.md` and vendored `.proto` pins in sync with [ethp2p](https://github.com/ethp2p/ethp2p); align `minimum_zig_version` / CI `ZIG_VERSION`.
 
 ## Requirements
 

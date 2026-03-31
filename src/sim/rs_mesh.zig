@@ -165,6 +165,13 @@ const topo_two_nodes = [_]Edge{
     .{ .a = 0, .b = 1 },
 };
 
+const topo_four_ring = [_]Edge{
+    .{ .a = 0, .b = 1 },
+    .{ .a = 1, .b = 2 },
+    .{ .a = 2, .b = 3 },
+    .{ .a = 3, .b = 0 },
+};
+
 const topo_six_nodes = [_]Edge{
     .{ .a = 0, .b = 1 },
     .{ .a = 0, .b = 4 },
@@ -217,6 +224,20 @@ test "abstract RS mesh two nodes (simnet scenario topology 0)" {
         .cfg = rsCfgDefault(),
         .payload = &payload,
         .max_rounds = 50_000,
+    });
+}
+
+test "abstract RS mesh four nodes ring (extra topology sanity)" {
+    const gpa = std.testing.allocator;
+    var payload: [2 * 1024]u8 = undefined;
+    fillPayload(&payload);
+
+    try runAbstractRsMesh(gpa, .{
+        .node_count = 4,
+        .edges = &topo_four_ring,
+        .cfg = rsCfgDefault(),
+        .payload = &payload,
+        .max_rounds = 200_000,
     });
 }
 

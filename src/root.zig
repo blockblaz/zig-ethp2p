@@ -9,6 +9,7 @@ pub const sim = struct {
     pub const gossipsub_transport = @import("sim/gossipsub_transport.zig");
     pub const gossipsub_protocol = @import("sim/gossipsub_protocol.zig");
     pub const gossipsub_broadcast = @import("sim/gossipsub_broadcast.zig");
+    pub const gossipsub_interop = @import("sim/gossipsub_interop.zig");
 };
 
 /// Higher-level broadcast / RS helpers aligned with ethp2p `broadcast/` (not wire-only).
@@ -37,6 +38,7 @@ test {
     _ = sim.gossipsub_transport;
     _ = sim.gossipsub_protocol;
     _ = sim.gossipsub_broadcast;
+    _ = sim.gossipsub_interop;
     _ = broadcast.engine;
     _ = broadcast.channel_rs;
     _ = broadcast.session_rs;
