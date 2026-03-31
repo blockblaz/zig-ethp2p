@@ -21,14 +21,15 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | RS parity encode (klauspost-default matrix) | [klauspost/reedsolomon](https://github.com/klauspost/reedsolomon) via ethp2p RS strategy | `layer.rs_encode`, `ReedSolomon`, `decodeMessage` |
 | RS unified strategy (per-session) | [`broadcast/rs/strategy.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/strategy.go) | `layer.rs_strategy` |
 | Abstract RS mesh (strategy-only, same topologies as Go `TestNetwork` RS) | [`sim/scenario_test.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/scenario_test.go) | `sim.rs_mesh`, `zig build simtest` |
-| **Not in scope yet** | [`broadcast/engine.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/engine.go), [`session.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/session.go), [`channel.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/channel.go), RLNC, full Go simnet stack, transport | — (see **Pending work** below) |
+| Gossipsub sim publish bytes (same layout as Go `encodeGossipsubMessage`) + default topic | [`sim/strategy_gossipsub.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/strategy_gossipsub.go) | `sim.gossipsub_transport` |
+| **Not in scope yet** | libp2p gossipsub host, QUIC simnet wiring, RLNC, full Go simnet parity | — (see **Pending work** below) |
 
 ## Pending work
 
 Items to tackle later; not an exhaustive roadmap.
 
-- **Broadcast session stack**: Port or wrap the reference **session / engine / channel** model (`session.go`, `engine.go`, `channel.go`) so chunk lifecycle, dedup, and routing ticks match ethp2p end-to-end (today only the RS **strategy** API is mirrored in Zig).
-- **Gossipsub strategy**: No Zig analogue of ethp2p’s gossipsub broadcast path or `TestNetwork/Gossipsub` in `sim/scenario_test.go`; add strategy + tests when that layer is needed.
+- **Broadcast session stack**: Implemented as `broadcast.*` (engine / RS channel / session); still no parity with full dedup / async verify / multi-scheme from the Go stack.
+- **Gossipsub**: `sim.gossipsub_transport` matches the sim **message envelope** and default topic; **protocol-core** (mesh RPC semantics) and **broadcast-integration** (engine + envelope) are still open. No libp2p host in Zig.
 - **Go simnet parity**: No integration with **[marcopolo/simnet](https://github.com/marcopolo/simnet)** / libp2p / QUIC. Abstract mesh tests deliberately avoid UDP and real latency; a future step is driving **this** library from a real network sim or FFI if we need byte-identical timing traces.
 - **Large / stress scenarios**: Go CI runs `TestLargeNetwork_RS` and `TestScalability` on `main` only; Zig has no equivalent long-run or scale tests yet.
 - **RLNC and other schemes**: Reference may grow beyond RS; RLNC and additional `broadcast.Scheme` implementations are out of tree.
