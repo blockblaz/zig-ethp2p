@@ -48,8 +48,6 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | [#13](https://github.com/ch4r10t33r/zig-ethp2p/issues/13) | RS abstract mesh: larger graphs & Go scalability alignment |
 | [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) | RLNC and additional EC `Scheme` types |
 | [#15](https://github.com/ch4r10t33r/zig-ethp2p/issues/15) | `UPSTREAM.md` / proto pins / CI Zig version alignment |
-| [#16](https://github.com/ch4r10t33r/zig-ethp2p/issues/16) | Developer task runner (`justfile` / Makefile parity with [ethp2p `justfile`](https://github.com/ethp2p/ethp2p/blob/main/justfile)) |
-
 ## Requirements
 
 - Zig **0.15.0** or newer (tested with **0.15.1**).
@@ -64,6 +62,8 @@ zig build test-stress  # same tests with `ZIG_ETHP2P_STRESS=1` (longer RS mesh c
 ```
 
 Add as a dependency and import the module `zig_ethp2p` (see `build.zig`).
+
+Optional: install [just](https://github.com/casey/just) and run `just` from the repo root for the same commands (`just build`, `just test`, `just fmt-check`, …); see [`justfile`](justfile) (similar role to [ethp2p’s `justfile`](https://github.com/ethp2p/ethp2p/blob/main/justfile)).
 
 ## Compatibility policy
 
