@@ -58,6 +58,20 @@ zig build test-stress  # same tests with `ZIG_ETHP2P_STRESS=1` (longer RS mesh c
 
 Add as a dependency and import the module `zig_ethp2p` (see `build.zig`).
 
+## Git workflow
+
+Land changes via **feature branches** and **pull requests** into `main` (not direct pushes to `main`), so CI and review run before merge.
+
+```sh
+git fetch origin && git checkout -b my-feature origin/main
+# edit, then:
+zig fmt . && zig build test
+git push -u origin my-feature
+gh pr create --base main --head my-feature --title "zig_ethp2p: …" --body "…"
+```
+
+Use commit messages like `zig_ethp2p: short description` (module prefix + summary).
+
 ## Compatibility policy
 
 - Vendored `.proto` files under `proto/` should match the reference tree; pin the upstream git revision in `UPSTREAM.md`.
