@@ -34,19 +34,20 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | App payload envelope entry point (re-export) | `encodeGossipsubMessage` | `broadcast.gossip` |
 | Gossipsim cross-checks (golden envelope, mesh fanout, `broadcast.gossip` vs transport) | — | `sim.gossipsub_interop` |
 | Gossipsub `ControlIHave` / `ControlIWant` / `ControlGraft` / `ControlPrune` / `ControlIDontWant`, full `ControlMessage` | [libp2p `rpc.proto`](https://github.com/libp2p/go-libp2p-pubsub/blob/master/pb/rpc.proto) | `sim.gossipsub_rpc_pb`, `proto/gossipsub_rpc.proto` |
-| Gossipsub top-level `RPC` (`subscriptions`, `publish`, `control`) + control-only envelope | stream payloads; unknown RPC fields skipped | `sim.gossipsub_rpc_pb` (`encodeRpc` / `decodeRpcOwned`, `encodeRpcEnvelopeControl`, `decodeRpcControlOnly`) |
+| Gossipsub top-level `RPC` (`subscriptions`, `publish`, `control`, `partial`) + control-only envelope | stream payloads; unknown RPC field numbers still skipped except **10** (`partial`) | `sim.gossipsub_rpc_pb` (`encodeRpc` / `decodeRpcOwned`, `encodeRpcEnvelopeControl`, `decodeRpcControlOnly`) |
+| `PartialMessagesExtension` (nested in `RPC.partial`) | libp2p `rpc.proto` field 10 body | `encodePartialMessagesExtension`, `decodePartialMessagesExtensionOwned` |
 | Unsigned-varint length prefix before `RPC` body | common libp2p framing | `encodeRpcLengthPrefixed`, `decodeRpcLengthPrefixedPrefix` |
-| **Still open** (see [issues](#pending-work)) | libp2p/simnet test host, `RPC` extensions (`partial`, …), RLNC, optional channel-style event loop / `VerdictPending` for non-RS schemes | — |
+| In-process duplex for length-prefixed `RPC` (simnet-style, no TCP/QUIC) | pair of `Endpoint`s over bounded byte queues | `sim.gossipsub_rpc_host` (`Link`, `Endpoint.sendRpc` / `recvRpcOwned`) |
+| **Still open** (see [issues](#pending-work)) | Production libp2p/QUIC transport (out of repo), experimental `RPC` extension fields beyond `partial`, RLNC, optional channel-style event loop / `VerdictPending` for non-RS schemes | — |
 
 ## Pending work
 
-**On `main` today:** wire + layer RS strategy; `layer.dedup` / `layer.dedup_registry` / `layer.verify_queue` / `layer.verify_workers`; `broadcast.*` (engine, channel, `relay_async_verify`, verified + unverified relay ingest); abstract RS mesh (**heap-backed**, 2-, 4-, 6-node default; **stress** adds higher six-node budget plus **8- and 16-node rings**); gossipsim stack; gossipsub **`RPC` fields 1–3** (`encodeRpc` / `decodeRpcOwned`, unknown fields skipped), **full `ControlMessage`**, **length-prefixed** RPC framing in `sim.gossipsub_rpc_pb`. CI enforces `build.zig.zon` `minimum_zig_version` vs workflow `ZIG_VERSION`; `just check-zig-ci-align` matches locally. Default `zig build test` stays fast.
+**On `main` today:** wire + layer RS strategy; `layer.dedup` / `layer.dedup_registry` / `layer.verify_queue` / `layer.verify_workers`; `broadcast.*` (engine, channel, `relay_async_verify`, verified + unverified relay ingest); abstract RS mesh (**heap-backed**, 2-, 4-, 6-node default; **stress** adds higher six-node budget plus **8- and 16-node rings**); gossipsim stack; gossipsub **`RPC`** (`encodeRpc` / `decodeRpcOwned` including **`partial` / `PartialMessagesExtension`**), **full `ControlMessage`**, **length-prefixed** framing, and **`gossipsub_rpc_host`** in-process duplex for tests. CI mirrors [ethp2p’s workflow](https://github.com/ethp2p/ethp2p/blob/main/.github/workflows/ci.yml): parallel `test-broadcast`, `test-sim-rs`, `test-sim-gossipsub` (Debug + TSan), `test-stress-ci` on `main` only, plus lint (`fmt`, `zig build`, `ast-check`). `build.zig.zon` `minimum_zig_version` must match workflow `ZIG_VERSION`; `just check-zig-ci-align` matches locally. For a single local run of everything, use `zig build test`.
 
 **Open issues** (roadmap, not exhaustive):
 
 | Issue | Topic |
 |-------|-------|
-| [#12](https://github.com/ch4r10t33r/zig-ethp2p/issues/12) | Libp2p streams, simnet/QUIC-style host, remaining gossipsub `RPC` extensions (`partial`, …) |
 | [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) | RLNC and additional EC `Scheme` types |
 
 ## Requirements
@@ -57,9 +58,13 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 
 ```sh
 zig build
-zig build test         # wire, layer, broadcast, sim (default CI)
-zig build simtest      # alias of `test` (mesh-focused name)
-zig build test-stress  # `ZIG_ETHP2P_STRESS=1` (longer RS mesh + 8-/16-node ring cases)
+zig build test              # full suite (wire, layer, broadcast, sim)
+zig build simtest           # alias of `test` (mesh-focused name)
+zig build test-stress       # `ZIG_ETHP2P_STRESS=1` (longer RS mesh + 8-/16-node ring cases)
+zig build test-broadcast    # CI split: wire + layer + broadcast (TSan)
+zig build test-sim-rs       # CI split: RS mesh (TSan)
+zig build test-sim-gossipsub
+zig build test-stress-ci    # full suite + stress + TSan (same as `large-network-rs` on main)
 ```
 
 Add as a dependency and import the module `zig_ethp2p` (see `build.zig`).

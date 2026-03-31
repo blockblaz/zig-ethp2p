@@ -9,9 +9,23 @@ default:
 build:
     zig build
 
-# Full test suite (same as CI).
+# Full test suite (local default; CI uses split jobs — see .github/workflows/ci.yml).
 test:
     zig build test --summary all
+
+# CI splits (ethp2p workflow parity); each uses Debug + TSan (≈ go -race).
+test-broadcast:
+    zig build test-broadcast --summary all
+
+test-sim-rs:
+    zig build test-sim-rs --summary all
+
+test-sim-gossipsub:
+    zig build test-sim-gossipsub --summary all
+
+# Main-branch CI job: full root + ZIG_ETHP2P_STRESS + TSan.
+test-stress-ci:
+    zig build test-stress-ci --summary all
 
 # Same binary as `test`; name matches RS mesh / simnet-parity wording.
 simtest:

@@ -1,7 +1,11 @@
-# Zig toolchain: keep ZIG_VERSION in sync with `minimum_zig_version` in build.zig.zon.
+# Parity with https://github.com/ethp2p/ethp2p/blob/main/.github/workflows/ci.yml (job names and intent).
+# - lint: go vet/staticcheck → zig fmt, default build, zig ast-check (syntax only; not staticcheck).
+# - unit-tests: go test -race ./broadcast/... → zig build test-broadcast (Debug + TSan ≈ -race).
+# - simnet-rs: filtered sim RS + reconnection → zig build test-sim-rs (no Zig reconnection test yet).
+# - simnet-gossipsub: filtered Gossipsub → zig build test-sim-gossipsub.
+# - large-network-rs: main only, large RS/scalability → zig build test-stress-ci (full root + ZIG_ETHP2P_STRESS + TSan).
 #
-# `zig build test` includes abstract RS mesh tests (`src/sim/rs_mesh.zig`) that mirror ethp2p
-# `sim/scenario_test.go` RS topologies against zig-ethp2p's `RsStrategy` (no Go/libp2p).
+# Zig toolchain: keep ZIG_VERSION in sync with `minimum_zig_version` in build.zig.zon.
 
 name: CI
 
@@ -15,8 +19,7 @@ env:
   ZIG_VERSION: 0.15.0
 
 jobs:
-  zig:
-    name: Lint & test
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,5 +45,61 @@ jobs:
       - name: zig fmt --check
         run: zig fmt --check .
 
-      - name: zig build test
-        run: zig build test --summary all
+      - name: zig build (default target)
+        run: zig build
+
+      - name: zig ast-check (syntax only)
+        run: |
+          set -euo pipefail
+          zig ast-check build.zig
+          zig ast-check --zon build.zig.zon
+          find src -name '*.zig' -print0 | while IFS= read -r -d '' f; do zig ast-check "$f"; done
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Run unit tests (broadcast stack parity)
+        run: zig build test-broadcast --summary all
+
+  simnet-rs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Run RS simnet tests
+        run: zig build test-sim-rs --summary all
+
+  simnet-gossipsub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Run Gossipsub simnet tests
+        run: zig build test-sim-gossipsub --summary all
+
+  large-network-rs:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Run large network RS tests (stress + TSan)
+        run: zig build test-stress-ci --summary all

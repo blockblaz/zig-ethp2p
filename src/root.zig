@@ -1,5 +1,6 @@
 //! Zig implementation of [ethp2p](https://github.com/ethp2p/ethp2p) wire formats.
 //! Behavior is validated against the reference Go stack; see `UPSTREAM.md`.
+//! Split CI test roots live in `ci_root_broadcast.zig`, `ci_root_sim_rs.zig`, and `ci_root_sim_gossipsub.zig`; update them when adding tests under those areas.
 
 pub const wire = @import("wire/root.zig");
 
@@ -11,6 +12,7 @@ pub const sim = struct {
     pub const gossipsub_broadcast = @import("sim/gossipsub_broadcast.zig");
     pub const gossipsub_interop = @import("sim/gossipsub_interop.zig");
     pub const gossipsub_rpc_pb = @import("sim/gossipsub_rpc_pb.zig");
+    pub const gossipsub_rpc_host = @import("sim/gossipsub_rpc_host.zig");
 };
 
 /// Higher-level broadcast / RS helpers aligned with ethp2p `broadcast/` (not wire-only).
@@ -50,6 +52,7 @@ test {
     _ = sim.gossipsub_broadcast;
     _ = sim.gossipsub_interop;
     _ = sim.gossipsub_rpc_pb;
+    _ = sim.gossipsub_rpc_host;
     _ = broadcast.engine;
     _ = broadcast.channel_rs;
     _ = broadcast.session_rs;
