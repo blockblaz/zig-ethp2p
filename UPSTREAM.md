@@ -20,7 +20,7 @@ When updating:
    - `broadcast/pb/broadcast.proto`
    - `protocol/pb/protocol.proto`
    - `broadcast/rs/pb/rs.proto`
-   - `go-libp2p-pubsub/pb/rpc.proto` (for `proto/gossipsub_rpc.proto` field numbers; see `sim/gossipsub_rpc_pb.zig`)
+   - `go-libp2p-pubsub/pb/rpc.proto` (for `proto/gossipsub_rpc.proto` field numbers; `sim/gossipsub_rpc_pb.zig` implements `RPC` 1–3, full `ControlMessage`, and varint length-prefixed framing—extensions such as `partial` are skipped on decode)
 2. Run `zig build test` (golden bytes must still match `google.golang.org/protobuf` output from that tree).
 3. Bump the commit hash in this file.
 
