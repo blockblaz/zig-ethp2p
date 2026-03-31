@@ -27,7 +27,7 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | RS emit planner (fair dispatch heap) | [`broadcast/rs/emit.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/emit.go) | `layer.emit_planner` |
 | RS parity encode (klauspost-default matrix) | [klauspost/reedsolomon](https://github.com/klauspost/reedsolomon) via ethp2p RS strategy | `layer.rs_encode`, `ReedSolomon`, `decodeMessage` |
 | RS unified strategy (per-session) | [`broadcast/rs/strategy.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/strategy.go) | `layer.rs_strategy` |
-| Abstract RS mesh (strategy-only; Go `TestNetwork` 0–1, 4-node ring, eight-node ring under stress) | [`sim/scenario_test.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/scenario_test.go) | `sim.rs_mesh`, `zig build simtest` |
+| Abstract RS mesh (heap-backed adjacency + `PeerSessionStats`; cap `MaxMeshNodes`; Go `TestNetwork` 0–1, 4-node ring; 8- / 16-node rings under stress) | [`sim/scenario_test.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/scenario_test.go) | `sim.rs_mesh`, `zig build simtest` |
 | Gossipsub sim publish bytes (same layout as Go `encodeGossipsubMessage`) + default topic | [`sim/strategy_gossipsub.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/strategy_gossipsub.go) | `sim.gossipsub_transport` |
 | Abstract topic fanout + per-peer inboxes (no protobuf RPC) | same driver `Publish` / subscribe mesh | `sim.gossipsub_protocol` |
 | Encode + fanout helper | `GossipsubNode.Publish` + topic delivery | `sim.gossipsub_broadcast` |
@@ -35,13 +35,13 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | Gossipsim cross-checks (golden envelope, mesh fanout, `broadcast.gossip` vs transport) | — | `sim.gossipsub_interop` |
 | Gossipsub `ControlIHave` / `ControlIWant` protobuf bodies (subset of [libp2p `rpc.proto`](https://github.com/libp2p/go-libp2p-pubsub/blob/master/pb/rpc.proto)) | `ControlMessage` nested fields | `sim.gossipsub_rpc_pb`, `proto/gossipsub_rpc.proto` |
 | Gossipsub top-level `RPC` with `control` only (field 3) | length-delimited `RPC` shell for stream payloads | `sim.gossipsub_rpc_pb` (`encodeRpcEnvelopeControl`, `decodeRpcControlOnly`) |
-| **Still open** (see [issues](#pending-work)) | Full gossipsub `RPC`, libp2p/simnet host, RLNC, larger RS mesh graphs, optional channel-style event loop / `VerdictPending` for non-RS schemes | — |
+| **Still open** (see [issues](#pending-work)) | Full gossipsub `RPC`, libp2p/simnet host, RLNC, optional channel-style event loop / `VerdictPending` for non-RS schemes | — |
 
 ## Pending work
 
-**On `main` today:** wire + layer RS strategy; `layer.dedup` / `layer.dedup_registry` / `layer.verify_queue` / `layer.verify_workers`; `broadcast.*` (engine, channel, `relay_async_verify`, verified + unverified relay ingest); abstract RS mesh (2-, 4-, 6-node; optional **stress** adds six-node budget and **eight-node ring**); gossipsim stack; gossipsub `ControlIHave` / `ControlIWant` plus **`RPC` control-only envelope** helpers in `sim.gossipsub_rpc_pb`. CI enforces `build.zig.zon` `minimum_zig_version` vs workflow `ZIG_VERSION`; `just check-zig-ci-align` matches locally. Default `zig build test` stays fast.
+**On `main` today:** wire + layer RS strategy; `layer.dedup` / `layer.dedup_registry` / `layer.verify_queue` / `layer.verify_workers`; `broadcast.*` (engine, channel, `relay_async_verify`, verified + unverified relay ingest); abstract RS mesh (**heap-backed**, 2-, 4-, 6-node default; **stress** adds higher six-node budget plus **8- and 16-node rings**); gossipsim stack; gossipsub `ControlIHave` / `ControlIWant` plus **`RPC` control-only envelope** helpers in `sim.gossipsub_rpc_pb`. CI enforces `build.zig.zon` `minimum_zig_version` vs workflow `ZIG_VERSION`; `just check-zig-ci-align` matches locally. Default `zig build test` stays fast.
 
-**Suggested next:** [#13](https://github.com/ch4r10t33r/zig-ethp2p/issues/13) — extend `sim/rs_mesh.zig` with larger topologies and budgets aligned with Go `sim/scenario_test.go` (builds on existing mesh tests without new transport).
+**Suggested next:** [#12](https://github.com/ch4r10t33r/zig-ethp2p/issues/12) — full gossipsub `RPC`, libp2p streams, simnet/QUIC-style host.
 
 **Tracked issues** (roadmap, not exhaustive):
 
@@ -49,7 +49,7 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 |-------|----------------|
 | [#11](https://github.com/ch4r10t33r/zig-ethp2p/issues/11) | **Closed** — engine dedup + async verify ingest (`relayIngestChunk*Engine`, `RelayAsyncVerifier.initBound`, `sessionDecodeClearEngineDedup`); RS verify stays sync (no `VerdictPending`) |
 | [#12](https://github.com/ch4r10t33r/zig-ethp2p/issues/12) | Open — full gossipsub `RPC`, libp2p streams, simnet/QUIC-style host |
-| [#13](https://github.com/ch4r10t33r/zig-ethp2p/issues/13) | Open — RS abstract mesh: larger graphs & Go scalability (**in progress**) |
+| [#13](https://github.com/ch4r10t33r/zig-ethp2p/issues/13) | **Closed** — heap-backed `sim/rs_mesh` (`MaxMeshNodes`), 16-node ring stress (Go `TestNetwork` remains the default topology reference) |
 | [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) | Open — RLNC and additional EC `Scheme` types |
 | [#15](https://github.com/ch4r10t33r/zig-ethp2p/issues/15) | **Closed** — `UPSTREAM.md` Zig toolchain note, CI `minimum_zig_version` check, `just check-zig-ci-align` |
 
@@ -63,7 +63,7 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 zig build
 zig build test         # wire, layer, broadcast, sim (default CI)
 zig build simtest      # alias of `test` (mesh-focused name)
-zig build test-stress  # same tests with `ZIG_ETHP2P_STRESS=1` (longer RS mesh case)
+zig build test-stress  # `ZIG_ETHP2P_STRESS=1` (longer RS mesh + 8-/16-node ring cases)
 ```
 
 Add as a dependency and import the module `zig_ethp2p` (see `build.zig`).
