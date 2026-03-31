@@ -41,7 +41,8 @@ pub const RelayAsyncVerifier = struct {
         ThreadQuotaExceeded,
     };
 
-    /// `pool_alloc` must be thread-safe if `n_jobs > 0`. `allocator` is for pending metadata and `out_q` (main thread).
+    /// `pool_alloc` must be thread-safe if `n_jobs > 0`. `allocator` backs pending metadata and `out_q`
+    /// (including worker `push`es); it must be thread-safe when `n_jobs > 0`.
     /// Initializes `self` in place so embedded `std.Thread.Pool` is not copied after worker threads start.
     pub fn init(
         self: *RelayAsyncVerifier,
@@ -58,7 +59,7 @@ pub const RelayAsyncVerifier = struct {
             .out_q = .{},
             .pool = undefined,
         };
-        try self.pool.init(pool_alloc, n_jobs, &self.out_q);
+        try self.pool.init(pool_alloc, allocator, n_jobs, &self.out_q);
     }
 
     pub fn deinit(self: *RelayAsyncVerifier) void {
@@ -253,8 +254,10 @@ test "relay async verify submitAwaitApply ingests chunk" {
 
     try ch.attachRelaySession("m1", &origin.preamble);
 
+    // Workers push into `out_q`: use a thread-safe allocator for verifier state, not `gpa`.
+    const valloc = std.heap.page_allocator;
     var verifier: RelayAsyncVerifier = undefined;
-    try RelayAsyncVerifier.init(&verifier, gpa, std.heap.page_allocator, 1, ch, null);
+    try RelayAsyncVerifier.init(&verifier, valloc, valloc, 1, ch, null);
     defer verifier.deinit();
 
     const c0 = origin.chunks[0];
@@ -287,8 +290,9 @@ test "relay async verify invalid chunk does not ingest" {
 
     try ch.attachRelaySession("m1", &origin.preamble);
 
+    const valloc = std.heap.page_allocator;
     var verifier: RelayAsyncVerifier = undefined;
-    try RelayAsyncVerifier.init(&verifier, gpa, std.heap.page_allocator, 1, ch, null);
+    try RelayAsyncVerifier.init(&verifier, valloc, valloc, 1, ch, null);
     defer verifier.deinit();
 
     var bad = try gpa.dupe(u8, origin.chunks[0]);
