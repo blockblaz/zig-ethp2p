@@ -41,17 +41,12 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 
 **On `main` today:** wire + layer RS strategy; `layer.dedup` / `layer.dedup_registry` / `layer.verify_queue` / `layer.verify_workers`; `broadcast.*` (engine, channel, `relay_async_verify`, verified + unverified relay ingest); abstract RS mesh (**heap-backed**, 2-, 4-, 6-node default; **stress** adds higher six-node budget plus **8- and 16-node rings**); gossipsim stack; gossipsub `ControlIHave` / `ControlIWant` plus **`RPC` control-only envelope** helpers in `sim.gossipsub_rpc_pb`. CI enforces `build.zig.zon` `minimum_zig_version` vs workflow `ZIG_VERSION`; `just check-zig-ci-align` matches locally. Default `zig build test` stays fast.
 
-**Suggested next:** [#12](https://github.com/ch4r10t33r/zig-ethp2p/issues/12) — full gossipsub `RPC`, libp2p streams, simnet/QUIC-style host.
+**Open issues** (roadmap, not exhaustive):
 
-**Tracked issues** (roadmap, not exhaustive):
-
-| Issue | Status / topic |
-|-------|----------------|
-| [#11](https://github.com/ch4r10t33r/zig-ethp2p/issues/11) | **Closed** — engine dedup + async verify ingest (`relayIngestChunk*Engine`, `RelayAsyncVerifier.initBound`, `sessionDecodeClearEngineDedup`); RS verify stays sync (no `VerdictPending`) |
-| [#12](https://github.com/ch4r10t33r/zig-ethp2p/issues/12) | Open — full gossipsub `RPC`, libp2p streams, simnet/QUIC-style host |
-| [#13](https://github.com/ch4r10t33r/zig-ethp2p/issues/13) | **Closed** — heap-backed `sim/rs_mesh` (`MaxMeshNodes`), 16-node ring stress (Go `TestNetwork` remains the default topology reference) |
-| [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) | Open — RLNC and additional EC `Scheme` types |
-| [#15](https://github.com/ch4r10t33r/zig-ethp2p/issues/15) | **Closed** — `UPSTREAM.md` Zig toolchain note, CI `minimum_zig_version` check, `just check-zig-ci-align` |
+| Issue | Topic |
+|-------|-------|
+| [#12](https://github.com/ch4r10t33r/zig-ethp2p/issues/12) | Full gossipsub `RPC`, libp2p streams, simnet/QUIC-style host |
+| [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) | RLNC and additional EC `Scheme` types |
 
 ## Requirements
 
