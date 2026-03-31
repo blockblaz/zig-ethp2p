@@ -1,54 +1,55 @@
-//! QUIC transport shape for ethp2p-style EC broadcast (reference: `github.com/ethp2p/ethp2p` `sim/host.go`).
+//! QUIC transport for ethp2p-style EC broadcast (reference: `github.com/ethp2p/ethp2p` `sim/host.go`).
 //!
-//! ethp2p uses **quic-go** with ALPN **`eth-ec-broadcast`**, a long `MaxIdleTimeout`, and high stream
-//! limits for per-chunk uni-streams. This repository does not ship a QUIC stack in-tree yet; the
-//! types below anchor configuration and entry points for a future integration.
+//! With **`-Denable-quic`**, this links [`gitlab.com/devnw/zig/quic`](https://gitlab.com/devnw/zig/quic) (TLS 1.3 + QUIC v1) and OpenSSL
+//! on non-Windows. Default builds omit that dependency; `listen` / `dial` then return `error.TransportNotImplemented`.
 //!
-//! **Next steps (production path):**
-//!
-//! - Link a TLS 1.3 + QUIC v1 implementation. One candidate is [`gitlab.com/devnw/zig/quic`](https://gitlab.com/devnw/zig/quic)
-//!   (Zig **0.15.1+**, OpenSSL `ssl`/`crypto` on non-Windows in its upstream `build.zig`).
-//! - Drive **BCAST / SESS / CHUNK** streams using `wire.*` framing on top of QUIC streams (or datagrams if spec allows).
-//! - CI: install OpenSSL dev headers where the QUIC dependency is built; keep default `zig build test` free of that link until the integration is opt-in (e.g. `build.zig` `-Denable-quic`).
-//!
-//! Until then, `listen` / `dial` return `error.TransportNotImplemented`.
+//! Run `zig build test-quic -Denable-quic` (after `libssl-dev` / equivalent) for the handshake smoke test.
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_opts = @import("zig_ethp2p_options");
+const common = @import("eth_ec_quic_common.zig");
 
-/// Application-Layer Protocol Negotiation identifier used by ethp2p’s QUIC host (`NextProtos`).
-pub const alpn_eth_ec_broadcast: []const u8 = "eth-ec-broadcast";
+pub const alpn_eth_ec_broadcast = common.alpn_eth_ec_broadcast;
+pub const EthEcQuicConfig = common.EthEcQuicConfig;
+pub const ListenAddress = common.ListenAddress;
 
-/// Tunables mirroring the intent of ethp2p `sim/host.go` `defaultQuicConfig` (not wire-identical to quic-go).
-pub const EthEcQuicConfig = struct {
-    /// Effectively “disable idle close” — ethp2p uses a one-year cap because quic-go rejects `MaxInt64`.
-    max_idle_timeout_ns: u64 = 365 * std.time.ns_per_day,
-    max_incoming_streams: u32 = 16_384,
-    max_incoming_uni_streams: u32 = 16_384,
+pub const EthEcQuicListener = struct {
+    inner: if (build_opts.enable_quic) struct {
+        ep: *@import("quic").QuicEndpoint,
+        /// Same as `ListenAddress.port` passed to `listen` (0 if you bound an ephemeral port — discovery not exposed yet).
+        port: u16,
+    } else struct {},
+    allocator: *std.mem.Allocator,
 
-    pub fn default() EthEcQuicConfig {
-        return .{};
+    pub fn deinit(self: *EthEcQuicListener) void {
+        if (comptime !build_opts.enable_quic) return;
+        const quic = @import("quic");
+        quic.endpointDeinit(self.inner.ep);
+    }
+
+    /// UDP port from `listen`’s `address.port` (0 when an ephemeral port was requested; devnw/quic 0.1.10 does not expose bound-port helpers on the package root).
+    pub fn localPort(self: *const EthEcQuicListener) u16 {
+        if (comptime !build_opts.enable_quic) return 0;
+        return self.inner.port;
     }
 };
 
-pub const ListenAddress = struct {
-    host: []const u8,
-    port: u16,
-};
-
-/// Placeholder listener; will wrap a real QUIC `Listener` once a stack is linked.
-pub const EthEcQuicListener = struct {
-    _phantom: u8 = 0,
-};
-
-/// Returns when a QUIC stack is integrated and bound to `address`.
-pub fn listen(_: EthEcQuicConfig, _: ListenAddress) error{TransportNotImplemented}!EthEcQuicListener {
-    return error.TransportNotImplemented;
+/// Binds a QUIC listener on `address`. Caller must drive `quic.poll` on the underlying endpoint (issue #27 will wire streams).
+/// `allocator` must outlive the listener until `deinit`.
+/// Errors include `error.TransportNotImplemented` without `-Denable-quic`, and `error.MissingServerIdentity` when server TLS material is absent.
+pub fn listen(allocator: *std.mem.Allocator, config: EthEcQuicConfig, address: ListenAddress) !EthEcQuicListener {
+    if (comptime !build_opts.enable_quic) return error.TransportNotImplemented;
+    const enabled = @import("eth_ec_quic_enabled.zig");
+    const ep = try enabled.listenImpl(allocator, config, address);
+    return .{ .inner = .{ .ep = ep, .port = address.port }, .allocator = allocator };
 }
 
-/// Returns when QUIC dial + TLS handshake to `remote` is implemented.
-pub fn dial(_: EthEcQuicConfig, _: ListenAddress) error{TransportNotImplemented}!void {
-    return error.TransportNotImplemented;
+/// Dials `remote` from an ephemeral local UDP bind, completes the TLS handshake, verifies ALPN, then closes the connection.
+pub fn dial(allocator: *std.mem.Allocator, config: EthEcQuicConfig, remote: ListenAddress) !void {
+    if (comptime !build_opts.enable_quic) return error.TransportNotImplemented;
+    const enabled = @import("eth_ec_quic_enabled.zig");
+    return enabled.dialImpl(allocator, config, remote);
 }
 
 test "ALPN matches ethp2p QUIC host" {
@@ -71,4 +72,10 @@ test "UDP bind ephemeral (bootstrap for future QUIC socket)" {
 
     const any = try std.net.Address.parseIp("127.0.0.1", 0);
     try std.posix.bind(sock, &any.any, any.getOsSockLen());
+}
+
+test {
+    if (comptime build_opts.enable_quic) {
+        _ = @import("eth_ec_quic_enabled.zig");
+    }
 }
