@@ -1,6 +1,6 @@
 //! Subset of [go-libp2p-pubsub `rpc.proto`](https://github.com/libp2p/go-libp2p-pubsub/blob/master/pb/rpc.proto):
-//! `ControlIHave` and `ControlIWant` only (length-delimited string fields, proto2-compatible wire).
-//! Does not build full `RPC` frames; embed returned blobs inside your transport as needed.
+//! `ControlIHave` and `ControlIWant` (length-delimited string fields, proto2-compatible wire),
+//! plus optional top-level `RPC` envelope with `control` (field 3) only for stream framing.
 
 const std = @import("std");
 const varint = @import("../wire/varint.zig");
@@ -73,6 +73,23 @@ pub fn encodeIWant(allocator: Allocator, message_ids: []const []const u8) Alloca
         try appendTagLenBytes(&list, allocator, 1, mid);
     }
     return try list.toOwnedSlice(allocator);
+}
+
+/// Top-level `RPC` with only `control` set (field 3). `control_body` is a serialized `ControlMessage`.
+pub fn encodeRpcEnvelopeControl(allocator: Allocator, control_body: []const u8) Allocator.Error![]u8 {
+    var list: std.ArrayListUnmanaged(u8) = .{};
+    errdefer list.deinit(allocator);
+    try appendTagLenBytes(&list, allocator, 3, control_body);
+    return try list.toOwnedSlice(allocator);
+}
+
+/// Parses `RPC` that consists solely of one `control` (field 3) length-delimited payload.
+pub fn decodeRpcControlOnly(buf: []const u8) DecodeError![]const u8 {
+    var offset: usize = 0;
+    const tl = try decodeTagLen(buf, &offset);
+    if (tl.field != 3) return error.BadTag;
+    if (offset != buf.len) return error.BadTag;
+    return tl.payload;
 }
 
 /// Wraps one `encodeIHave` payload as `ControlMessage.ihave` (field 1, repeated).
@@ -185,4 +202,25 @@ test "ControlMessage single IHave wrapper roundtrip" {
     defer dec.deinit(gpa);
     try std.testing.expectEqualStrings("t", dec.topic_id.?);
     try std.testing.expectEqualStrings("mid", dec.message_ids[0]);
+}
+
+test "RPC envelope control-only roundtrip" {
+    const gpa = std.testing.allocator;
+    const inner = try encodeIHave(gpa, "topic", &.{"m1"});
+    defer gpa.free(inner);
+    const ctl = try encodeControlMessageSingleIHave(gpa, inner);
+    defer gpa.free(ctl);
+    const rpc = try encodeRpcEnvelopeControl(gpa, ctl);
+    defer gpa.free(rpc);
+
+    const ctl2 = try decodeRpcControlOnly(rpc);
+    try std.testing.expectEqualSlices(u8, ctl, ctl2);
+
+    var off: usize = 0;
+    const tl = try decodeTagLen(ctl2, &off);
+    try std.testing.expectEqual(@as(u32, 1), tl.field);
+    var dec = try decodeIHaveOwned(gpa, tl.payload);
+    defer dec.deinit(gpa);
+    try std.testing.expectEqualStrings("topic", dec.topic_id.?);
+    try std.testing.expectEqualStrings("m1", dec.message_ids[0]);
 }
