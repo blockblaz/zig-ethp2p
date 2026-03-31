@@ -172,6 +172,18 @@ const topo_four_ring = [_]Edge{
     .{ .a = 3, .b = 0 },
 };
 
+/// Eight-node ring (larger diameter than four-node ring; stress-scale coverage).
+const topo_eight_ring = [_]Edge{
+    .{ .a = 0, .b = 1 },
+    .{ .a = 1, .b = 2 },
+    .{ .a = 2, .b = 3 },
+    .{ .a = 3, .b = 4 },
+    .{ .a = 4, .b = 5 },
+    .{ .a = 5, .b = 6 },
+    .{ .a = 6, .b = 7 },
+    .{ .a = 7, .b = 0 },
+};
+
 const topo_six_nodes = [_]Edge{
     .{ .a = 0, .b = 1 },
     .{ .a = 0, .b = 4 },
@@ -286,5 +298,27 @@ test "abstract RS mesh six nodes env stress (ZIG_ETHP2P_STRESS=1)" {
         .cfg = rsCfgDefault(),
         .payload = &payload,
         .max_rounds = 3_000_000,
+    });
+}
+
+/// Larger graph than default six-node `TestNetwork` topology 1; only with `ZIG_ETHP2P_STRESS=1`.
+test "abstract RS mesh eight nodes ring env stress (large-network scale)" {
+    const builtin = @import("builtin");
+    if (builtin.os.tag == .windows) return;
+
+    const gpa = std.testing.allocator;
+    const env = std.process.getEnvVarOwned(gpa, "ZIG_ETHP2P_STRESS") catch return;
+    defer gpa.free(env);
+    if (!std.mem.eql(u8, env, "1")) return;
+
+    var payload: [10 * 1024]u8 = undefined;
+    fillPayload(&payload);
+
+    try runAbstractRsMesh(gpa, .{
+        .node_count = 8,
+        .edges = &topo_eight_ring,
+        .cfg = rsCfgDefault(),
+        .payload = &payload,
+        .max_rounds = 8_000_000,
     });
 }
