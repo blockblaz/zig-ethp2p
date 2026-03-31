@@ -7,6 +7,14 @@ message RPC {
   repeated SubOpts subscriptions = 1;
   repeated Message publish = 2;
   optional ControlMessage control = 3;
+  optional PartialMessagesExtension partial = 10;
+}
+
+message PartialMessagesExtension {
+  optional string topicID = 1;
+  optional bytes groupID = 2;
+  optional bytes partialMessage = 3;
+  optional bytes partsMetadata = 4;
 }
 
 message SubOpts {

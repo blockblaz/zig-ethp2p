@@ -1,7 +1,9 @@
 //! Subset of [go-libp2p-pubsub `rpc.proto`](https://github.com/libp2p/go-libp2p-pubsub/blob/master/pb/rpc.proto):
 //! `ControlIHave` / `ControlIWant`, full `ControlMessage` (graft / prune / idontwant), top-level
 //! `RPC` (`subscriptions`, `publish`, `control`), and unsigned-varint length-prefix helpers for
-//! stream framing. Unknown top-level RPC fields are skipped (e.g. `partial`, extensions).
+//! stream framing. `RPC.partial` (field 10) is supported as an opaque length-delimited payload;
+//! use `PartialMessagesExtension` helpers to build or parse that body. Other extension field
+//! numbers are still skipped on decode.
 
 const std = @import("std");
 const varint = @import("../wire/varint.zig");
@@ -622,16 +624,85 @@ pub fn decodeControlMessageOwned(allocator: Allocator, buf: []const u8) (DecodeE
     };
 }
 
+pub const PartialMessagesExtensionRef = struct {
+    topic_id: ?[]const u8 = null,
+    group_id: ?[]const u8 = null,
+    partial_message: ?[]const u8 = null,
+    parts_metadata: ?[]const u8 = null,
+};
+
+pub const PartialMessagesExtensionOwned = struct {
+    topic_id: ?[]u8 = null,
+    group_id: ?[]u8 = null,
+    partial_message: ?[]u8 = null,
+    parts_metadata: ?[]u8 = null,
+
+    pub fn deinit(self: *PartialMessagesExtensionOwned, allocator: Allocator) void {
+        if (self.topic_id) |x| allocator.free(x);
+        if (self.group_id) |x| allocator.free(x);
+        if (self.partial_message) |x| allocator.free(x);
+        if (self.parts_metadata) |x| allocator.free(x);
+        self.* = .{};
+    }
+};
+
+pub fn encodePartialMessagesExtension(allocator: Allocator, p: PartialMessagesExtensionRef) Allocator.Error![]u8 {
+    var list: std.ArrayListUnmanaged(u8) = .{};
+    errdefer list.deinit(allocator);
+    if (p.topic_id) |x| try appendTagLenBytes(&list, allocator, 1, x);
+    if (p.group_id) |x| try appendTagLenBytes(&list, allocator, 2, x);
+    if (p.partial_message) |x| try appendTagLenBytes(&list, allocator, 3, x);
+    if (p.parts_metadata) |x| try appendTagLenBytes(&list, allocator, 4, x);
+    return try list.toOwnedSlice(allocator);
+}
+
+pub fn decodePartialMessagesExtensionOwned(allocator: Allocator, buf: []const u8) (DecodeError || Allocator.Error)!PartialMessagesExtensionOwned {
+    var offset: usize = 0;
+    var out: PartialMessagesExtensionOwned = .{};
+    errdefer out.deinit(allocator);
+
+    while (offset < buf.len) {
+        const tag = try varint.decode(buf, &offset);
+        const field: u32 = @intCast(tag >> 3);
+        const wire: u32 = @intCast(tag & 7);
+        if (wire != 2) return error.BadWireType;
+        const pl = try decodeLengthDelimited(buf, &offset);
+        switch (field) {
+            1 => {
+                if (out.topic_id != null) return error.BadTag;
+                out.topic_id = try allocator.dupe(u8, pl);
+            },
+            2 => {
+                if (out.group_id != null) return error.BadTag;
+                out.group_id = try allocator.dupe(u8, pl);
+            },
+            3 => {
+                if (out.partial_message != null) return error.BadTag;
+                out.partial_message = try allocator.dupe(u8, pl);
+            },
+            4 => {
+                if (out.parts_metadata != null) return error.BadTag;
+                out.parts_metadata = try allocator.dupe(u8, pl);
+            },
+            else => return error.BadTag,
+        }
+    }
+    return out;
+}
+
 pub const RpcEncodeRef = struct {
     subscriptions: []const SubOptsRef = &.{},
     publish: []const GossipMessageRef = &.{},
     control: ?[]const u8 = null,
+    /// Serialized `PartialMessagesExtension` (or other payload accepted by peers) for `RPC.partial` (field 10).
+    partial: ?[]const u8 = null,
 };
 
 pub const RpcOwned = struct {
     subscriptions: []SubOptsOwned,
     publish: []GossipMessageOwned,
     control: ?[]u8,
+    partial: ?[]u8,
 
     pub fn deinit(self: *RpcOwned, allocator: Allocator) void {
         for (self.subscriptions) |*s| s.deinit(allocator);
@@ -639,6 +710,7 @@ pub const RpcOwned = struct {
         for (self.publish) |*m| m.deinit(allocator);
         allocator.free(self.publish);
         if (self.control) |c| allocator.free(c);
+        if (self.partial) |c| allocator.free(c);
         self.* = undefined;
     }
 };
@@ -659,6 +731,9 @@ pub fn encodeRpc(allocator: Allocator, r: RpcEncodeRef) Allocator.Error![]u8 {
     if (r.control) |c| {
         try appendTagLenBytes(&list, allocator, 3, c);
     }
+    if (r.partial) |p| {
+        try appendTagLenBytes(&list, allocator, 10, p);
+    }
     return try list.toOwnedSlice(allocator);
 }
 
@@ -676,6 +751,8 @@ pub fn decodeRpcOwned(allocator: Allocator, buf: []const u8) (DecodeError || All
     }
     var control: ?[]u8 = null;
     errdefer if (control) |c| allocator.free(c);
+    var partial: ?[]u8 = null;
+    errdefer if (partial) |c| allocator.free(c);
 
     while (offset < buf.len) {
         const tag = try varint.decode(buf, &offset);
@@ -698,6 +775,12 @@ pub fn decodeRpcOwned(allocator: Allocator, buf: []const u8) (DecodeError || All
                 const pl = try decodeLengthDelimited(buf, &offset);
                 control = try allocator.dupe(u8, pl);
             },
+            10 => {
+                if (wire != 2) return error.BadWireType;
+                if (partial != null) return error.BadTag;
+                const pl = try decodeLengthDelimited(buf, &offset);
+                partial = try allocator.dupe(u8, pl);
+            },
             else => try skipProtoField(buf, &offset, wire),
         }
     }
@@ -706,6 +789,7 @@ pub fn decodeRpcOwned(allocator: Allocator, buf: []const u8) (DecodeError || All
         .subscriptions = try subs.toOwnedSlice(allocator),
         .publish = try pubs.toOwnedSlice(allocator),
         .control = control,
+        .partial = partial,
     };
 }
 
@@ -762,6 +846,7 @@ test "full RPC subscriptions publish control roundtrip" {
 
     var dec = try decodeRpcOwned(gpa, rpc_enc);
     defer dec.deinit(gpa);
+    try std.testing.expect(dec.partial == null);
 
     try std.testing.expectEqual(@as(usize, 1), dec.subscriptions.len);
     try std.testing.expect(dec.subscriptions[0].subscribe.?);
@@ -778,6 +863,35 @@ test "full RPC subscriptions publish control roundtrip" {
     defer ih_dec.deinit(gpa);
     try std.testing.expectEqualStrings("top", ih_dec.topic_id.?);
     try std.testing.expectEqualStrings("mid", ih_dec.message_ids[0]);
+}
+
+test "PartialMessagesExtension and RPC.partial field 10 roundtrip" {
+    const gpa = std.testing.allocator;
+    const pext = try encodePartialMessagesExtension(gpa, .{
+        .topic_id = "topic-p",
+        .group_id = "grp",
+        .partial_message = "blob",
+    });
+    defer gpa.free(pext);
+
+    var pdec = try decodePartialMessagesExtensionOwned(gpa, pext);
+    defer pdec.deinit(gpa);
+    try std.testing.expectEqualStrings("topic-p", pdec.topic_id.?);
+    try std.testing.expectEqualStrings("grp", pdec.group_id.?);
+    try std.testing.expectEqualStrings("blob", pdec.partial_message.?);
+
+    const rpc_enc = try encodeRpc(gpa, .{
+        .subscriptions = &.{.{ .subscribe = true, .topicid = "t" }},
+        .partial = pext,
+    });
+    defer gpa.free(rpc_enc);
+
+    var rdec = try decodeRpcOwned(gpa, rpc_enc);
+    defer rdec.deinit(gpa);
+    try std.testing.expect(rdec.partial != null);
+    var pdec2 = try decodePartialMessagesExtensionOwned(gpa, rdec.partial.?);
+    defer pdec2.deinit(gpa);
+    try std.testing.expectEqualStrings("topic-p", pdec2.topic_id.?);
 }
 
 test "ControlMessage graft prune idontwant roundtrip" {

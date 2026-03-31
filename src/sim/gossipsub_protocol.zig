@@ -1,7 +1,7 @@
 //! Abstract topic fanout and per-peer inboxes (no libp2p, no protobuf RPC).
 //! Models “subscribed peers receive opaque gossip payloads” as in ethp2p’s
 //! [`GossipsubNode.Publish`](https://github.com/ethp2p/ethp2p/blob/main/sim/strategy_gossipsub.go).
-//! Full gossipsub IHAVE/IWANT **wire** formats are still out of scope.
+//! Gossipsub protobuf `RPC` / control bodies live in `gossipsub_rpc_pb`; this module stays opaque fanout only.
 
 const std = @import("std");
 
