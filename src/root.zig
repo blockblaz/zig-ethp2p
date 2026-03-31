@@ -5,6 +5,7 @@
 pub const wire = @import("wire/root.zig");
 
 /// Abstract multi-hop RS scenarios aligned with ethp2p `sim/scenario_test.go` (strategy-only; no libp2p).
+/// `rs_mesh.MeshParams.partition` models link outage + heal (upstream simnet-rs CI also matches `TestNodeReconnection`, which is not implemented in Go on ethp2p `main` today).
 pub const sim = struct {
     pub const rs_mesh = @import("sim/rs_mesh.zig");
     pub const gossipsub_transport = @import("sim/gossipsub_transport.zig");

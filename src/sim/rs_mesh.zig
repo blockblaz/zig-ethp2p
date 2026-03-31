@@ -4,6 +4,11 @@
 //! Graph structure and `PeerSessionStats` matrices are heap-backed (`MaxMeshNodes` upper bound).
 //! This validates zig-ethp2p’s strategy layer under multi-hop chunk forwarding; it is not a UDP
 //! timing simulation.
+//!
+//! Optional `MeshParams.partition` models a link outage then heal (roughly what upstream CI names
+//! `TestNodeReconnection` alongside `TestNetwork/RS`; that Go test name is not present on ethp2p
+//! `main` today, but the scenario is still useful). Dropped chunk deliveries call
+//! `RsStrategy.chunkSent(..., false)` so inflight state matches a failed send.
 
 const std = @import("std");
 const broadcast_types = @import("../layer/broadcast_types.zig");
@@ -16,12 +21,20 @@ const RsStrategy = rs_strategy.RsStrategy;
 
 pub const Edge = struct { a: usize, b: usize };
 
+/// Undirected links that stop carrying chunks and routing updates until `heal_at_round` (inclusive of healing from that round onward).
+pub const PartitionPhase = struct {
+    edges: []const Edge,
+    heal_at_round: usize,
+};
+
 pub const MeshParams = struct {
     node_count: usize,
     edges: []const Edge,
     cfg: RsConfig,
     payload: []const u8,
     max_rounds: usize,
+    /// When non-null, `partition.edges` are treated as down for rounds `0 .. heal_at_round` (exclusive).
+    partition: ?PartitionPhase = null,
 };
 
 fn nodeId(buf: *[8]u8, i: usize) []const u8 {
@@ -129,13 +142,22 @@ pub fn runAbstractRsMesh(gpa: Allocator, params: MeshParams) !void {
     }
     @memset(decoded, null);
 
+    const link_up = try gpa.alloc(bool, n * n);
+    defer gpa.free(link_up);
+
     var round: usize = 0;
     while (round < params.max_rounds) : (round += 1) {
-        for (nodes) |*src| {
+        fillLinkUp(n, params.edges, params.partition, round, link_up);
+
+        for (nodes, 0..) |*src, si| {
             const outgoing = try src.strat.pollChunks();
             defer gpa.free(outgoing);
             for (outgoing) |disp| {
                 const dst_i = indexOfPeer(nodes, disp.peer) orelse continue;
+                if (!link_up[si * n + dst_i]) {
+                    src.strat.chunkSent(disp.peer, disp.chunk_id.handle(), false);
+                    continue;
+                }
                 const r = try nodes[dst_i].strat.takeChunk(src.id, disp.chunk_id, disp.data, null);
                 src.strat.chunkSent(disp.peer, disp.chunk_id.handle(), true);
                 if (dst_i != 0 and r.complete and decoded[dst_i] == null) {
@@ -144,7 +166,7 @@ pub fn runAbstractRsMesh(gpa: Allocator, params: MeshParams) !void {
             }
         }
 
-        try exchangeRouting(gpa, nodes[0..n], neigh[0..n], deg[0..n]);
+        try exchangeRouting(gpa, nodes[0..n], neigh[0..n], deg[0..n], link_up, n);
 
         var all = true;
         for (1..n) |j| {
@@ -167,13 +189,39 @@ pub fn runAbstractRsMesh(gpa: Allocator, params: MeshParams) !void {
     }
 }
 
+fn fillLinkUp(
+    n: usize,
+    base_edges: []const Edge,
+    partition: ?PartitionPhase,
+    round: usize,
+    link_up: []bool,
+) void {
+    std.debug.assert(link_up.len == n * n);
+    @memset(link_up, false);
+    for (base_edges) |e| {
+        link_up[e.a * n + e.b] = true;
+        link_up[e.b * n + e.a] = true;
+    }
+    if (partition) |p| {
+        if (round < p.heal_at_round) {
+            for (p.edges) |e| {
+                link_up[e.a * n + e.b] = false;
+                link_up[e.b * n + e.a] = false;
+            }
+        }
+    }
+}
+
 fn exchangeRouting(
     gpa: Allocator,
     nodes: []MeshNode,
     neigh: []const []const usize,
     deg: []const usize,
+    link_up: []const bool,
+    n: usize,
 ) !void {
     std.debug.assert(neigh.len == nodes.len and deg.len == nodes.len);
+    std.debug.assert(link_up.len == n * n);
     for (nodes, 0..) |*src, si| {
         const pr = try src.strat.pollRouting(gpa, false);
         if (!pr.emit) continue;
@@ -182,6 +230,7 @@ fn exchangeRouting(
         var k: usize = 0;
         while (k < deg[si]) : (k += 1) {
             const j = neigh[si][k];
+            if (!link_up[si * n + j]) continue;
             const cancels = try nodes[j].strat.routingUpdate(src.id, bm);
             defer gpa.free(cancels);
         }
@@ -199,6 +248,17 @@ const topo_four_ring = [_]Edge{
     .{ .a = 1, .b = 2 },
     .{ .a = 2, .b = 3 },
     .{ .a = 3, .b = 0 },
+};
+
+/// Simple path 0–1–2–3 (bridge edge (1,2) can be partitioned to split the graph).
+const topo_four_line = [_]Edge{
+    .{ .a = 0, .b = 1 },
+    .{ .a = 1, .b = 2 },
+    .{ .a = 2, .b = 3 },
+};
+
+const partition_bridge_1_2 = [_]Edge{
+    .{ .a = 1, .b = 2 },
 };
 
 /// Eight-node ring (larger diameter than four-node ring; stress-scale coverage).
@@ -279,6 +339,24 @@ test "abstract RS mesh four nodes ring (extra topology sanity)" {
         .cfg = rsCfgDefault(),
         .payload = &payload,
         .max_rounds = 200_000,
+    });
+}
+
+test "abstract RS mesh four-node line partition heal (sim TestNodeReconnection intent)" {
+    const gpa = std.testing.allocator;
+    var payload: [2 * 1024]u8 = undefined;
+    fillPayload(&payload);
+
+    try runAbstractRsMesh(gpa, .{
+        .node_count = 4,
+        .edges = &topo_four_line,
+        .cfg = rsCfgDefault(),
+        .payload = &payload,
+        .max_rounds = 400_000,
+        .partition = .{
+            .edges = &partition_bridge_1_2,
+            .heal_at_round = 3_000,
+        },
     });
 }
 
