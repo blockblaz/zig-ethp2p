@@ -27,6 +27,7 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | RS emit planner (fair dispatch heap) | [`broadcast/rs/emit.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/emit.go) | `layer.emit_planner` |
 | RS parity encode (klauspost-default matrix) | [klauspost/reedsolomon](https://github.com/klauspost/reedsolomon) via ethp2p RS strategy | `layer.rs_encode`, `ReedSolomon`, `decodeMessage` |
 | RS unified strategy (per-session) | [`broadcast/rs/strategy.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/strategy.go) | `layer.rs_strategy` |
+| EC scheme id (per-channel `Scheme` name; RS only wired) | [`broadcast/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/types.go) `Scheme`, [`broadcast/rs/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/types.go) `NewScheme` (`"reed-solomon"`) | `layer.ec_scheme` (`EcSchemeKind`); RLNC / more schemes → [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) |
 | Abstract RS mesh (heap-backed adjacency + `PeerSessionStats`; cap `MaxMeshNodes`; Go `TestNetwork` 0–1, 4-node ring; **partition/heal** for CI’s `TestNodeReconnection` filter — no matching Go test on ethp2p `main` today; 8- / 16-node rings under stress) | [`sim/scenario_test.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/scenario_test.go), [`.github/workflows/ci.yml`](https://github.com/ethp2p/ethp2p/blob/main/.github/workflows/ci.yml) `simnet-rs` | `sim.rs_mesh` (`MeshParams.partition`), `zig build simtest` |
 | Gossipsub sim publish bytes (same layout as Go `encodeGossipsubMessage`) + default topic | [`sim/strategy_gossipsub.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/strategy_gossipsub.go) | `sim.gossipsub_transport` |
 | Abstract topic fanout + per-peer inboxes (no protobuf RPC) | same driver `Publish` / subscribe mesh | `sim.gossipsub_protocol` |
@@ -38,17 +39,35 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | `PartialMessagesExtension` (nested in `RPC.partial`) | libp2p `rpc.proto` field 10 body | `encodePartialMessagesExtension`, `decodePartialMessagesExtensionOwned` |
 | Unsigned-varint length prefix before `RPC` body | common libp2p framing | `encodeRpcLengthPrefixed`, `decodeRpcLengthPrefixedPrefix` |
 | In-process duplex for length-prefixed `RPC` (simnet-style, no TCP/QUIC) | pair of `Endpoint`s over bounded byte queues | `sim.gossipsub_rpc_host` (`Link`, `Endpoint.sendRpc` / `recvRpcOwned`) |
-| **Still open** (see [issues](#pending-work)) | Production libp2p/QUIC transport (out of repo), experimental `RPC` extension fields beyond `partial`, RLNC, optional channel-style event loop / `VerdictPending` for non-RS schemes | — |
+| **Still open** | — | [Pending work](#pending-work) |
+
+## Scope on `main` (at a glance)
+
+This is **what is already implemented**—not the backlog. Per-module mapping and upstream links are in the [implementation table](#implementation-status-vs-reference).
+
+- **Wire and RS:** length-prefixed frames, stream selector, BCAST / SESS / CHUNK streams, RS `Preamble` / `ChunkIdent` framing (`wire.*`, `layer.rs_init`, `layer.rs_encode`, `layer.rs_strategy`, `layer.bitmap`, `layer.emit_planner`).
+- **Dedup and verify:** `layer.dedup`, `layer.dedup_registry`, `layer.verify_queue`, `layer.verify_workers`; relay / async-verify paths in `broadcast.channel_rs` and `broadcast.relay_async_verify`.
+- **Broadcast stack:** `broadcast.engine`, `broadcast.session_rs`, `broadcast.observer`, and related session hooks aligned with ethp2p’s broadcast layer.
+- **EC scheme id:** `layer.ec_scheme` (`EcSchemeKind`, `"reed-solomon"` wire name); only Reed–Solomon is wired end-to-end ([#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) tracks RLNC and further schemes).
+- **Abstract RS mesh:** heap-backed graphs and `PeerSessionStats` (`sim.rs_mesh`): 2-node, 4-node ring, 6-node `TestNetwork`-style topology, **partition/heal** line test, chunk-len variant; with `ZIG_ETHP2P_STRESS=1`, larger six-node budget plus **8-** and **16-node** rings.
+- **Gossipsub (sim / wire helpers):** transport, protocol, broadcast, interop, `RPC` encode/decode (including **`partial`** / `PartialMessagesExtension`), full `ControlMessage`, varint length prefix, in-process **`gossipsub_rpc_host`** for tests (`sim.gossipsub_*`, `broadcast.gossip`).
+- **CI:** aligned with [ethp2p’s `ci.yml`](https://github.com/ethp2p/ethp2p/blob/main/.github/workflows/ci.yml): `zig build test-broadcast`, `test-sim-rs`, `test-sim-gossipsub` (Debug + TSan), `test-stress-ci` on **`main` only**, plus lint (`zig fmt --check`, `zig build`, `zig ast-check`). `build.zig.zon` **`minimum_zig_version`** must match workflow **`ZIG_VERSION`**; `just check-zig-ci-align` checks that locally.
+- **One-shot local verification:** `zig build test` runs the full suite.
 
 ## Pending work
 
-**On `main` today:** wire + layer RS strategy; `layer.dedup` / `layer.dedup_registry` / `layer.verify_queue` / `layer.verify_workers`; `broadcast.*` (engine, channel, `relay_async_verify`, verified + unverified relay ingest); abstract RS mesh (**heap-backed**, 2-, 4-, 6-node default; **four-node line partition/heal** for reconnect-style CI coverage; **stress** adds higher six-node budget plus **8- and 16-node rings**); gossipsim stack; gossipsub **`RPC`** (`encodeRpc` / `decodeRpcOwned` including **`partial` / `PartialMessagesExtension`**), **full `ControlMessage`**, **length-prefixed** framing, and **`gossipsub_rpc_host`** in-process duplex for tests. CI mirrors [ethp2p’s workflow](https://github.com/ethp2p/ethp2p/blob/main/.github/workflows/ci.yml): parallel `test-broadcast`, `test-sim-rs`, `test-sim-gossipsub` (Debug + TSan), `test-stress-ci` on `main` only, plus lint (`fmt`, `zig build`, `ast-check`). `build.zig.zon` `minimum_zig_version` must match workflow `ZIG_VERSION`; `just check-zig-ci-align` matches locally. For a single local run of everything, use `zig build test`.
+What is **not** covered yet (the [implementation table](#implementation-status-vs-reference) remains authoritative for details):
 
-**Open issues** (roadmap, not exhaustive):
+- **Transport:** production libp2p/QUIC (ethp2p’s in-repo QUIC is illustrative; this repo stays strategy + wire + sim helpers).
+- **Gossipsub `RPC`:** protobuf extension fields beyond **`partial`** / `PartialMessagesExtension` (field 10).
+- **Erasure coding:** `layer.ec_scheme` holds the scheme enum and `"reed-solomon"` wire name; **RLNC** (strategy, preamble, chunk layout) and any further `Scheme` types remain ([#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14)).
+- **Engine:** optional channel-style event loop / `VerdictPending` for non-RS schemes.
+
+**Tracked issues** (roadmap, not exhaustive):
 
 | Issue | Topic |
 |-------|-------|
-| [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) | RLNC and additional EC `Scheme` types |
+| [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) | RLNC + additional EC schemes (beyond `layer.ec_scheme` scaffold) |
 
 ## Requirements
 

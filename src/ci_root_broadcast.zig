@@ -6,6 +6,7 @@ test {
     _ = @import("layer/bitmap.zig");
     _ = @import("layer/dedup.zig");
     _ = @import("layer/dedup_registry.zig");
+    _ = @import("layer/ec_scheme.zig");
     _ = @import("layer/emit_planner.zig");
     _ = @import("layer/rs_encode.zig");
     _ = @import("layer/rs_init.zig");
