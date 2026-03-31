@@ -304,7 +304,7 @@ pub const RsStrategy = struct {
         chunk_id: ChunkIdent,
         data: []const u8,
         dedup: ?*broadcast_types.DedupCancel,
-    ) Allocator.Error!struct { verdict: broadcast_types.Verdict, complete: bool } {
+    ) Allocator.Error!broadcast_types.ChunkIngestResult {
         const idx_i = chunk_id.index;
         if (idx_i < 0 or @as(usize, @intCast(idx_i)) >= self.total_chunks) {
             return .{ .verdict = .invalid, .complete = false };
