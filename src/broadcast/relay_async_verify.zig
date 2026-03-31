@@ -1,4 +1,6 @@
 //! Async SHA256 verify via `VerifyWorkerPool`, then single-threaded `drainCompleted` → `relayIngestChunk`.
+//! Mirrors ethp2p `channelVerifyResult` → `handleVerifyResult` → `acceptChunk` when the driver polls the queue.
+//! Use `initBound` with `Engine.enable_cross_session_dedup` so `registry` matches `relayIngestChunkEngine`.
 //! Callers must use a **thread-safe** `pool_alloc` when `n_jobs > 0` (e.g. `std.heap.page_allocator`).
 //! After `init` with `n_jobs > 0`, do not move or copy `RelayAsyncVerifier`: `std.Thread.Pool` workers
 //! pin `&self.pool.pool` to the address used during `init`.
@@ -60,6 +62,17 @@ pub const RelayAsyncVerifier = struct {
             .pool = undefined,
         };
         try self.pool.init(pool_alloc, allocator, n_jobs, &self.out_q);
+    }
+
+    /// Uses `channel.engine.dedupRegistryPtr()` with `EngineConfig.enable_cross_session_dedup`.
+    pub fn initBound(
+        self: *RelayAsyncVerifier,
+        allocator: Allocator,
+        pool_alloc: Allocator,
+        n_jobs: usize,
+        channel: *ChannelRs,
+    ) Error!void {
+        try self.init(allocator, pool_alloc, n_jobs, channel, channel.engine.dedupRegistryPtr());
     }
 
     pub fn deinit(self: *RelayAsyncVerifier) void {
@@ -303,4 +316,48 @@ test "relay async verify invalid chunk does not ingest" {
 
     const st = ch.sessionStrategy("m1").?;
     try std.testing.expect(!st.haveChunk(.{ .index = 0 }));
+}
+
+test "relay async initBound dedup decode clears engine registry" {
+    const gpa = std.testing.allocator;
+    var eng = try @import("engine.zig").Engine.init(gpa, "local", .{ .enable_cross_session_dedup = true });
+    defer eng.deinit();
+
+    const cfg = @import("../layer/rs_init.zig").RsConfig{
+        .data_shards = 4,
+        .parity_shards = 2,
+        .chunk_len = 0,
+        .bitmap_threshold = 0,
+        .forward_multiplier = 4,
+        .disable_bitmap = false,
+    };
+
+    const ch = try eng.attachChannelRs("topic", cfg);
+    try ch.addMember("peerA");
+
+    const payload = [_]u8{ 11, 22, 33, 44, 55 };
+    var origin = try rs_strategy.RsStrategy.newOrigin(gpa, cfg, &payload);
+    defer origin.deinit();
+
+    try ch.attachRelaySession("m1", &origin.preamble);
+
+    const valloc = std.heap.page_allocator;
+    var verifier: RelayAsyncVerifier = undefined;
+    try RelayAsyncVerifier.initBound(&verifier, valloc, valloc, 1, ch);
+    defer verifier.deinit();
+
+    const dc: usize = 4;
+    for (0..dc) |k| {
+        try verifier.submitAwaitApply("m1", "peerA", .{ .index = @intCast(k) }, origin.chunks[k], null);
+    }
+
+    const st = ch.sessionStrategy("m1").?;
+    try std.testing.expect(st.complete);
+
+    const decoded = try ch.sessionDecodeClearEngineDedup("m1");
+    defer gpa.free(decoded);
+    try std.testing.expectEqualSlices(u8, &payload, decoded);
+
+    const reg = eng.dedupRegistryPtr().?;
+    try std.testing.expect(try reg.claim(gpa, ch.id, "m1", 0));
 }

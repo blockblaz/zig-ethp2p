@@ -19,8 +19,9 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | Engine-wide dedup registry (`channel` + `message` + chunk index) | multi-peer ingest dedup | `layer.dedup_registry`, `Engine.enable_cross_session_dedup` |
 | Verify result FIFO (single-threaded `Verified()` shim) | async verify channels | `layer.verify_queue` |
 | Verify worker pool (SHA256 vs preamble hash → queue) | background verify workers | `layer.verify_workers` |
-| Relay session attach + `relayIngestChunk` / `relayIngestChunkVerified` | relay ingest path | `broadcast.channel_rs` |
-| Async SHA256 verify → `relayIngestChunk` (driver polls `drainCompleted`) | Go `Verified()` → `handleVerifyResult` | `broadcast.relay_async_verify`, `layer.verify_workers` |
+| Relay session attach + `relayIngestChunk` / `relayIngestChunkVerified` / `relayIngestChunk*Engine` | relay ingest path | `broadcast.channel_rs` |
+| Async SHA256 verify → `relayIngestChunk` (driver polls `drainCompleted`); `initBound` uses engine dedup | Go `Verified()` → `handleVerifyResult` | `broadcast.relay_async_verify`, `layer.verify_workers` |
+| Decode clears cross-session dedup keys | registry lifecycle after reconstruction | `sessionDecodeClearEngineDedup` |
 | RS routing bitmap | [`broadcast/rs/bitmap.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/bitmap.go) | `layer.bitmap` |
 | RS `Config` / `initPreamble` | [`broadcast/rs/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/types.go) | `layer.rs_init` |
 | RS emit planner (fair dispatch heap) | [`broadcast/rs/emit.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/emit.go) | `layer.emit_planner` |
@@ -46,9 +47,9 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 
 | Issue | Status / topic |
 |-------|----------------|
-| [#11](https://github.com/ch4r10t33r/zig-ethp2p/issues/11) | Open — dedup + verify pool + ingest; async `RelayAsyncVerifier` on `main`; engine-bound helpers (`*Engine` ingest, decode clears dedup) may land via open PR — close or narrow when merged |
+| [#11](https://github.com/ch4r10t33r/zig-ethp2p/issues/11) | **Closed** — engine dedup + async verify ingest (`relayIngestChunk*Engine`, `RelayAsyncVerifier.initBound`, `sessionDecodeClearEngineDedup`); RS verify stays sync (no `VerdictPending`) |
 | [#12](https://github.com/ch4r10t33r/zig-ethp2p/issues/12) | Open — full gossipsub `RPC`, libp2p streams, simnet/QUIC-style host |
-| [#13](https://github.com/ch4r10t33r/zig-ethp2p/issues/13) | Open — RS abstract mesh: larger graphs & Go scalability alignment (**next up**) |
+| [#13](https://github.com/ch4r10t33r/zig-ethp2p/issues/13) | Open — RS abstract mesh: larger graphs & Go scalability (**in progress**) |
 | [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) | Open — RLNC and additional EC `Scheme` types |
 | [#15](https://github.com/ch4r10t33r/zig-ethp2p/issues/15) | **Closed** — `UPSTREAM.md` Zig toolchain note, CI `minimum_zig_version` check, `just check-zig-ci-align` |
 
