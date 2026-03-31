@@ -1,4 +1,6 @@
 //! RS-only broadcast channel: members, sessions, publish (aligned with ethp2p `broadcast/channel.go`).
+//! Ingest: `relayIngestChunk` stores bytes without a hash check; `relayIngestChunkVerified` runs
+//! `RsStrategy.verifyChunk` first so invalid shards never hit the dedup registry or `takeChunk`.
 
 const std = @import("std");
 const broadcast_types = @import("../layer/broadcast_types.zig");
@@ -182,6 +184,24 @@ pub const ChannelRs = struct {
         }
         return strat.takeChunk(peer, chunk_id, data, dedup);
     }
+
+    /// Like `relayIngestChunk`, but rejects data that fails `verifyChunk` before dedup / `takeChunk`.
+    pub fn relayIngestChunkVerified(
+        self: *ChannelRs,
+        registry: ?*dedup_registry_mod.DedupRegistry,
+        message_id: []const u8,
+        peer: []const u8,
+        chunk_id: rs_strategy.ChunkIdent,
+        data: []const u8,
+        dedup: ?*broadcast_types.DedupCancel,
+    ) (Allocator.Error || error{UnknownMessage})!broadcast_types.ChunkIngestResult {
+        const strat = self.sessionStrategy(message_id) orelse return error.UnknownMessage;
+        const v = strat.verifyChunk(chunk_id, data);
+        if (v != .accepted) {
+            return .{ .verdict = v, .complete = false };
+        }
+        return self.relayIngestChunk(registry, message_id, peer, chunk_id, data, dedup);
+    }
 };
 
 test "channel publish and drain to one member" {
@@ -270,4 +290,63 @@ test "relayIngestChunk unknown message" {
         error.UnknownMessage,
         ch.relayIngestChunk(eng.dedupRegistryPtr(), "missing", "peer", .{ .index = 0 }, &.{}, null),
     );
+}
+
+test "relayIngestChunkVerified rejects invalid chunk before dedup claim" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.init(gpa, "local", .{});
+    defer eng.deinit();
+
+    const cfg = RsConfig{
+        .data_shards = 4,
+        .parity_shards = 2,
+        .chunk_len = 0,
+        .bitmap_threshold = 0,
+        .forward_multiplier = 4,
+        .disable_bitmap = false,
+    };
+
+    const ch = try eng.attachChannelRs("topic", cfg);
+    try ch.addMember("peerA");
+
+    const payload = [_]u8{ 9, 8, 7 };
+    var origin = try RsStrategy.newOrigin(gpa, cfg, &payload);
+    defer origin.deinit();
+
+    try ch.attachRelaySession("m1", &origin.preamble);
+
+    var reg: dedup_registry_mod.DedupRegistry = .{};
+    defer reg.deinit(gpa);
+
+    const chunk0 = origin.chunks[0];
+    var bad = try gpa.dupe(u8, chunk0);
+    defer gpa.free(bad);
+    if (bad.len > 0) bad[0] +%= 1;
+
+    const r_bad = try ch.relayIngestChunkVerified(&reg, "m1", "peerA", .{ .index = 0 }, bad, null);
+    try std.testing.expectEqual(broadcast_types.Verdict.invalid, r_bad.verdict);
+
+    const r_ok = try ch.relayIngestChunkVerified(&reg, "m1", "peerA", .{ .index = 0 }, chunk0, null);
+    try std.testing.expectEqual(broadcast_types.Verdict.accepted, r_ok.verdict);
+}
+
+test "engine forgetDedupForMessage clears keys" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.init(gpa, "local", .{ .enable_cross_session_dedup = true });
+    defer eng.deinit();
+
+    const cfg = RsConfig{
+        .data_shards = 4,
+        .parity_shards = 2,
+        .chunk_len = 0,
+        .bitmap_threshold = 0,
+        .forward_multiplier = 4,
+        .disable_bitmap = false,
+    };
+
+    const ch = try eng.attachChannelRs("topic", cfg);
+    const reg = eng.dedupRegistryPtr().?;
+    try std.testing.expect(try reg.claim(gpa, ch.id, "m1", 0));
+    eng.forgetDedupForMessage(ch.id, "m1");
+    try std.testing.expect(try reg.claim(gpa, ch.id, "m1", 0));
 }
