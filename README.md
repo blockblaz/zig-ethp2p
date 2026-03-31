@@ -53,7 +53,7 @@ This is **what is already implemented**—not the backlog. Per-module mapping an
 - **Abstract RS mesh:** heap-backed graphs and `PeerSessionStats` (`sim.rs_mesh`): 2-node, 4-node ring, 6-node `TestNetwork`-style topology, **partition/heal** line test, chunk-len variant; with `ZIG_ETHP2P_STRESS=1`, larger six-node budget plus **8-** and **16-node** rings.
 - **Gossipsub (sim / wire helpers):** transport, protocol, broadcast, interop, `RPC` encode/decode (including **`partial`** / `PartialMessagesExtension`), full `ControlMessage`, varint length prefix, in-process **`gossipsub_rpc_host`** for tests (`sim.gossipsub_*`, `broadcast.gossip`).
 - **QUIC (experimental):** `transport.eth_ec_quic` — ALPN and tunables aligned with ethp2p’s illustrative QUIC host; `listen` / `dial` not implemented until a QUIC+TLS dependency is integrated.
-- **CI:** aligned with [ethp2p’s `ci.yml`](https://github.com/ethp2p/ethp2p/blob/main/.github/workflows/ci.yml): `zig build test-broadcast`, `test-sim-rs`, `test-sim-gossipsub` (Debug + TSan), `test-stress-ci` on **`main` only**, plus lint (`zig fmt --check`, `zig build`, `zig ast-check`). `build.zig.zon` **`minimum_zig_version`** must match workflow **`ZIG_VERSION`**; `just check-zig-ci-align` checks that locally.
+- **CI:** aligned with [ethp2p’s `ci.yml`](https://github.com/ethp2p/ethp2p/blob/main/.github/workflows/ci.yml): `zig build test-broadcast`, `test-sim-rs`, `test-sim-gossipsub` (Debug + TSan), `test-quic -Denable-quic` (OpenSSL on Ubuntu), `test-stress-ci` on **`main` only**, plus lint (`zig fmt --check`, `zig build`, `zig ast-check`). `build.zig.zon` **`minimum_zig_version`** must match workflow **`ZIG_VERSION`**; `just check-zig-ci-align` checks that locally.
 - **One-shot local verification:** `zig build test` runs the full suite.
 
 ## Pending work
@@ -73,7 +73,7 @@ What is **not** covered yet (the [implementation table](#implementation-status-v
 
 ## Requirements
 
-- Zig **0.15.0** or newer (tested with **0.15.1**).
+- Zig **0.15.1** or newer.
 
 ## Build
 
@@ -85,6 +85,7 @@ zig build test-stress       # `ZIG_ETHP2P_STRESS=1` (longer RS mesh + 8-/16-node
 zig build test-broadcast    # CI split: wire + layer + broadcast (TSan)
 zig build test-sim-rs       # CI split: RS mesh (TSan)
 zig build test-sim-gossipsub
+zig build test-quic -Denable-quic   # QUIC+TLS smoke (OpenSSL); CI job `quic-transport`
 zig build test-stress-ci    # full suite + stress + TSan (same as `large-network-rs` on main)
 ```
 

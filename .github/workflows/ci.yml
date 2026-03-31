@@ -16,7 +16,7 @@ on:
     branches: [main, feature]
 
 env:
-  ZIG_VERSION: 0.15.0
+  ZIG_VERSION: 0.15.1
 
 jobs:
   lint:
@@ -90,6 +90,21 @@ jobs:
 
       - name: Run Gossipsub simnet tests
         run: zig build test-sim-gossipsub --summary all
+
+  quic-transport:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OpenSSL development headers
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: QUIC transport tests (devnw/quic + TLS)
+        run: zig build test-quic -Denable-quic --summary all
 
   large-network-rs:
     runs-on: ubuntu-latest
