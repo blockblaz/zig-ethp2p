@@ -74,7 +74,7 @@ fn vandermonde(allocator: std.mem.Allocator, rows: usize, cols: usize) EncodeErr
     return m;
 }
 
-fn matrixMultiply(allocator: std.mem.Allocator, left: [][]const u8, right: [][]const u8) EncodeError![][]u8 {
+fn matrixMultiply(allocator: std.mem.Allocator, left: []const []const u8, right: []const []const u8) EncodeError![][]u8 {
     const nrows = left.len;
     const nmid = left[0].len;
     std.debug.assert(right.len == nmid);
@@ -94,7 +94,7 @@ fn matrixMultiply(allocator: std.mem.Allocator, left: [][]const u8, right: [][]c
 
 fn subMatrix(
     allocator: std.mem.Allocator,
-    m: [][]const u8,
+    m: []const []const u8,
     rmin: usize,
     cmin: usize,
     rmax: usize,
@@ -115,7 +115,7 @@ fn identityMatrix(allocator: std.mem.Allocator, size: usize) EncodeError![][]u8 
     return m;
 }
 
-fn augment(allocator: std.mem.Allocator, left: [][]const u8, right: [][]const u8) EncodeError![][]u8 {
+fn augment(allocator: std.mem.Allocator, left: []const []const u8, right: []const []const u8) EncodeError![][]u8 {
     std.debug.assert(left.len == right.len);
     const rows = left.len;
     const lcols = left[0].len;
@@ -176,7 +176,7 @@ fn gaussianElimination(m: [][]u8) EncodeError!void {
     }
 }
 
-fn matrixInvert(allocator: std.mem.Allocator, m_in: [][]const u8) EncodeError![][]u8 {
+fn matrixInvert(allocator: std.mem.Allocator, m_in: []const []const u8) EncodeError![][]u8 {
     const size = m_in.len;
     std.debug.assert(size == m_in[0].len);
 
@@ -416,9 +416,24 @@ pub fn decodeMessage(
     expected_message_hash: [32]u8,
 ) EncodeError![]u8 {
     if (message_length == 0) return error.InvalidMessageLength;
+    const total = data_shards + parity_shards;
+    if (shards.len < total) return error.InvalidLayout;
+
+    const was_empty = try allocator.alloc(bool, total);
+    defer allocator.free(was_empty);
+    for (0..total) |i| was_empty[i] = (shards[i].len == 0);
+
     var rs = try ReedSolomon.init(allocator, data_shards, parity_shards);
     defer rs.deinit();
     try rs.reconstructData(allocator, shards, shard_len);
+    defer {
+        for (0..total) |i| {
+            if (was_empty[i] and shards[i].len == shard_len) {
+                allocator.free(shards[i]);
+                shards[i] = &[_]u8{};
+            }
+        }
+    }
 
     const cat_len = data_shards * shard_len;
     if (message_length > cat_len) return error.InvalidMessageLength;
@@ -520,6 +535,7 @@ test "ReedSolomon encode reconstructData one missing data shard" {
     shards[1] = &[_]u8{};
 
     try rs.reconstructData(gpa, &shards, shard_len);
+    defer gpa.free(shards[1]);
     try std.testing.expectEqualSlices(u8, &saved, shards[1]);
 }
 

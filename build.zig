@@ -26,4 +26,7 @@ pub fn build(b: *std.Build) void {
     const run_lib_tests = b.addRunArtifact(lib_tests);
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&run_lib_tests.step);
+
+    const simtest_step = b.step("simtest", "Abstract RS mesh (simnet-parity); same binary as test");
+    simtest_step.dependOn(&run_lib_tests.step);
 }

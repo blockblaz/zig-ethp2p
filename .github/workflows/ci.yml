@@ -1,4 +1,7 @@
-# Zig toolchain must stay in sync with `minimum_zig_version` in build.zig.zon (currently 0.15.0).
+# Zig toolchain: keep ZIG_VERSION in sync with `minimum_zig_version` in build.zig.zon.
+#
+# `zig build test` includes abstract RS mesh tests (`src/sim/rs_mesh.zig`) that mirror ethp2p
+# `sim/scenario_test.go` RS topologies against zig-ethp2p's `RsStrategy` (no Go/libp2p).
 
 name: CI
 

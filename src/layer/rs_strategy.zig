@@ -112,7 +112,7 @@ pub const RsStrategy = struct {
         self.have.deinit(allocator);
     }
 
-    pub fn newOrigin(allocator: Allocator, config: RsConfig, payload: []const u8) Allocator.Error!RsStrategy {
+    pub fn newOrigin(allocator: Allocator, config: RsConfig, payload: []const u8) (Allocator.Error || rs_encode.EncodeError)!RsStrategy {
         const layout = rs_init.initPreamble(config, payload.len);
         const dc = @as(usize, @intCast(layout.data_chunks));
         const pc = @as(usize, @intCast(layout.parity_chunks));
@@ -201,10 +201,7 @@ pub const RsStrategy = struct {
         const tot = preamble.totalChunks();
 
         var seed: u64 = undefined;
-        std.crypto.random.bytes(std.mem.asBytes(&seed)) catch {
-            var prng = std.Random.DefaultPrng.init(0x9e3779b97f4a7c15);
-            seed = prng.random().int(u64);
-        };
+        std.crypto.random.bytes(std.mem.asBytes(&seed));
 
         const chunks = try allocator.alloc([]u8, tot);
         errdefer allocator.free(chunks);
@@ -251,7 +248,8 @@ pub const RsStrategy = struct {
         const allocator = self.allocator;
         if (self.peers.fetchRemove(peer)) |kv| {
             allocator.free(kv.key);
-            kv.value.deinit(allocator);
+            var ps = kv.value;
+            ps.deinit(allocator);
         }
 
         const key = try allocator.dupe(u8, peer);
@@ -407,7 +405,7 @@ pub const RsStrategy = struct {
         return out;
     }
 
-    pub fn pollChunks(self: *RsStrategy) Allocator.Error![]broadcast_types.ChunkDispatch(ChunkIdent) {
+    pub fn pollChunks(self: *RsStrategy) (Allocator.Error || emit_planner.PlannerError)![]broadcast_types.ChunkDispatch(ChunkIdent) {
         const allocator = self.allocator;
         var list: std.ArrayListUnmanaged(broadcast_types.ChunkDispatch(ChunkIdent)) = .{};
         errdefer list.deinit(allocator);
@@ -423,7 +421,7 @@ pub const RsStrategy = struct {
         return try list.toOwnedSlice(allocator);
     }
 
-    fn allocate(self: *RsStrategy, peer: []const u8, ps: *PeerState) Allocator.Error!?broadcast_types.ChunkDispatch(ChunkIdent) {
+    fn allocate(self: *RsStrategy, peer: []const u8, ps: *PeerState) (Allocator.Error || emit_planner.PlannerError)!?broadcast_types.ChunkDispatch(ChunkIdent) {
         const allocator = self.allocator;
         var skipped: std.ArrayListUnmanaged(emit_planner.EmitEntry) = .{};
         defer skipped.deinit(allocator);
