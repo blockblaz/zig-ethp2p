@@ -18,8 +18,20 @@ pub const layer = struct {
     pub const rs_strategy = @import("layer/rs_strategy.zig");
 };
 
+/// Session / engine / RS channel stack aligned with ethp2p `broadcast/` (single-threaded `drive` style).
+pub const broadcast = struct {
+    pub const observer = @import("broadcast/observer.zig");
+    pub const engine = @import("broadcast/engine.zig");
+    pub const channel_rs = @import("broadcast/channel_rs.zig");
+    pub const session_rs = @import("broadcast/session_rs.zig");
+};
+
 test {
     _ = wire;
     _ = layer;
     _ = sim.rs_mesh;
+    _ = broadcast.engine;
+    _ = broadcast.channel_rs;
+    _ = broadcast.session_rs;
+    _ = broadcast.observer;
 }
