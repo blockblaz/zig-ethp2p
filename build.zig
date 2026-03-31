@@ -3,8 +3,19 @@ const std = @import("std");
 fn linkOpenSslNonWindows(step: *std.Build.Step.Compile, resolved_target: std.Build.ResolvedTarget) void {
     if (resolved_target.result.os.tag == .windows) return;
     step.linkLibC();
-    step.linkSystemLibrary("ssl");
-    step.linkSystemLibrary("crypto");
+    // Homebrew: pkg-config for both libssl and libcrypto repeats the same `-rpath .../openssl@3/.../lib`.
+    // dyld aborts on duplicate LC_RPATH (often mistaken for a hang). Use pkg-config only for ssl;
+    // link libcrypto by name so symbols resolve without a second identical rpath entry.
+    switch (resolved_target.result.os.tag) {
+        .driverkit, .ios, .macos, .tvos, .visionos, .watchos => {
+            step.root_module.linkSystemLibrary("ssl", .{});
+            step.root_module.linkSystemLibrary("crypto", .{ .use_pkg_config = .no });
+        },
+        else => {
+            step.linkSystemLibrary("ssl");
+            step.linkSystemLibrary("crypto");
+        },
+    }
 }
 
 fn wireZigEthP2pModule(
@@ -161,6 +172,7 @@ pub fn build(b: *std.Build) void {
     });
     if (enable_quic) linkOpenSslNonWindows(quic_ci_tests, ci_target);
     const run_quic_ci = b.addRunArtifact(quic_ci_tests);
+    run_quic_ci.has_side_effects = true;
     const test_quic_step = b.step("test-quic", "Transport QUIC tests (use with -Denable-quic; OpenSSL on Linux/macOS)");
     test_quic_step.dependOn(&run_quic_ci.step);
 }

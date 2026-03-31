@@ -1,4 +1,5 @@
 const std = @import("std");
+const frame = @import("frame.zig");
 
 /// Matches `ethp2p.protocol.Protocol` in `protocol.proto` (numeric values).
 ///
@@ -16,7 +17,7 @@ pub const Protocol = enum(u8) {
 pub const ErrUnspecified = error{ProtocolUnspecified};
 
 /// Matches `protocol.WriteSelector`.
-pub fn writeSelectorByte(writer: anytype, p: Protocol) @TypeOf(writer).Error!void {
+pub fn writeSelectorByte(writer: anytype, p: Protocol) frame.WriterError(@TypeOf(writer))!void {
     try writer.writeAll(&.{@intFromEnum(p)});
 }
 

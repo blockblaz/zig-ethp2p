@@ -14,6 +14,12 @@ pub const alpn_eth_ec_broadcast = common.alpn_eth_ec_broadcast;
 pub const EthEcQuicConfig = common.EthEcQuicConfig;
 pub const ListenAddress = common.ListenAddress;
 
+/// When `-Denable-quic` is set, QUIC stream helpers for `wire.*` (BCAST / SESS / CHUNK). Empty otherwise.
+pub const wire = if (build_opts.enable_quic)
+    @import("eth_ec_quic_wire_enabled.zig")
+else
+    struct {};
+
 pub const EthEcQuicListener = struct {
     inner: if (build_opts.enable_quic) struct {
         ep: *@import("quic").QuicEndpoint,
@@ -35,7 +41,7 @@ pub const EthEcQuicListener = struct {
     }
 };
 
-/// Binds a QUIC listener on `address`. Caller must drive `quic.poll` on the underlying endpoint (issue #27 will wire streams).
+/// Binds a QUIC listener on `address`. Caller must drive `quic.poll` on the underlying endpoint; with QUIC enabled see `wire` for stream adapters (`QuicIoPair`, `QuicStreamReader` / `QuicStreamWriter`).
 /// `allocator` must outlive the listener until `deinit`.
 /// Errors include `error.TransportNotImplemented` without `-Denable-quic`, and `error.MissingServerIdentity` when server TLS material is absent.
 pub fn listen(allocator: *std.mem.Allocator, config: EthEcQuicConfig, address: ListenAddress) !EthEcQuicListener {
@@ -77,5 +83,6 @@ test "UDP bind ephemeral (bootstrap for future QUIC socket)" {
 test {
     if (comptime build_opts.enable_quic) {
         _ = @import("eth_ec_quic_enabled.zig");
+        _ = @import("eth_ec_quic_wire_enabled.zig");
     }
 }

@@ -34,7 +34,7 @@ pub fn writeChunkStream(
     message_id: []const u8,
     chunk_id: []const u8,
     payload: []const u8,
-) (@TypeOf(writer).Error || frame.FrameError || std.mem.Allocator.Error || ChunkStreamError)!void {
+) (frame.WriterError(@TypeOf(writer)) || frame.FrameError || std.mem.Allocator.Error || ChunkStreamError)!void {
     if (payload.len > max_chunk_data_size) return error.ChunkPayloadTooLarge;
 
     try protocol.writeSelectorByte(writer, .chunk);
@@ -60,7 +60,7 @@ pub fn writeRsShardChunk(
     message_id: []const u8,
     shard_index: i32,
     payload: []const u8,
-) (@TypeOf(writer).Error || frame.FrameError || std.mem.Allocator.Error || ChunkStreamError)!void {
+) (frame.WriterError(@TypeOf(writer)) || frame.FrameError || std.mem.Allocator.Error || ChunkStreamError)!void {
     const chunk_id = try rs.encodeChunkIdent(allocator, .{ .index = shard_index });
     defer allocator.free(chunk_id);
     try writeChunkStream(writer, allocator, channel, message_id, chunk_id, payload);

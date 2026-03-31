@@ -33,7 +33,7 @@ pub const layer = struct {
 };
 
 /// Session / engine / RS channel stack aligned with ethp2p `broadcast/` (single-threaded `drive` style).
-/// Production-style transport (QUIC) — see `transport/eth_ec_quic.zig`; not yet wired to `wire.*` sessions.
+/// Production-style transport (QUIC) — see `transport/eth_ec_quic.zig`; with `-Denable-quic`, `transport.eth_ec_quic.wire` adapts QUIC streams to `wire.*` BCAST / SESS / CHUNK.
 pub const transport = struct {
     pub const eth_ec_quic = @import("transport/eth_ec_quic.zig");
 };

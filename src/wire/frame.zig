@@ -7,9 +7,17 @@ pub const FrameError = error{
     FrameTooLarge,
 };
 
+/// `std.io` writers and QUIC adapters often pass a pointer type; `Error` lives on the pointee.
+pub fn WriterError(comptime W: type) type {
+    return switch (@typeInfo(W)) {
+        .pointer => |info| info.child.Error,
+        else => W.Error,
+    };
+}
+
 /// Writes a length-prefixed payload: 4-byte big-endian length then bytes.
 /// Matches `broadcast.WriteFrame` in github.com/ethp2p/ethp2p.
-pub fn writeFrame(writer: anytype, payload: []const u8) (@TypeOf(writer).Error || FrameError)!void {
+pub fn writeFrame(writer: anytype, payload: []const u8) (WriterError(@TypeOf(writer)) || FrameError)!void {
     if (payload.len > max_frame_size) return error.FrameTooLarge;
     var len_buf: [4]u8 = undefined;
     std.mem.writeInt(u32, &len_buf, @intCast(payload.len), .big);
