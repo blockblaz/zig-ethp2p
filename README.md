@@ -22,14 +22,15 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | RS unified strategy (per-session) | [`broadcast/rs/strategy.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/strategy.go) | `layer.rs_strategy` |
 | Abstract RS mesh (strategy-only, same topologies as Go `TestNetwork` RS) | [`sim/scenario_test.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/scenario_test.go) | `sim.rs_mesh`, `zig build simtest` |
 | Gossipsub sim publish bytes (same layout as Go `encodeGossipsubMessage`) + default topic | [`sim/strategy_gossipsub.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/strategy_gossipsub.go) | `sim.gossipsub_transport` |
-| **Not in scope yet** | libp2p gossipsub host, QUIC simnet wiring, RLNC, full Go simnet parity | — (see **Pending work** below) |
+| Abstract topic fanout + per-peer inboxes (no protobuf RPC) | same driver `Publish` / subscribe mesh | `sim.gossipsub_protocol` |
+| **Not in scope yet** | libp2p gossipsub host, QUIC simnet wiring, gossipsub protobuf RPC, encode+fanout helper PR, RLNC | — (see **Pending work** below) |
 
 ## Pending work
 
 Items to tackle later; not an exhaustive roadmap.
 
 - **Broadcast session stack**: Implemented as `broadcast.*` (engine / RS channel / session); still no parity with full dedup / async verify / multi-scheme from the Go stack.
-- **Gossipsub**: `sim.gossipsub_transport` matches the sim **message envelope** and default topic; **protocol-core** (mesh RPC semantics) and **broadcast-integration** (engine + envelope) are still open. No libp2p host in Zig.
+- **Gossipsub**: `sim.gossipsub_transport` (envelope), `sim.gossipsub_protocol` (abstract fanout mesh). Integration helpers (`encodeAndFanout`, `broadcast.gossip`) land in the next PR. No libp2p host, no IHAVE/IWANT **wire** parity with `go-libp2p-pubsub` protobuf.
 - **Go simnet parity**: No integration with **[marcopolo/simnet](https://github.com/marcopolo/simnet)** / libp2p / QUIC. Abstract mesh tests deliberately avoid UDP and real latency; a future step is driving **this** library from a real network sim or FFI if we need byte-identical timing traces.
 - **Large / stress scenarios**: Go CI runs `TestLargeNetwork_RS` and `TestScalability` on `main` only; Zig has no equivalent long-run or scale tests yet.
 - **RLNC and other schemes**: Reference may grow beyond RS; RLNC and additional `broadcast.Scheme` implementations are out of tree.
