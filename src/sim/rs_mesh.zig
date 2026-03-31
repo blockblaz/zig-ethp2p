@@ -268,3 +268,23 @@ test "abstract RS mesh six nodes fixed chunk len (simnet RS-ChunkLen)" {
         .max_rounds = 2_000_000,
     });
 }
+
+test "abstract RS mesh six nodes env stress (ZIG_ETHP2P_STRESS=1)" {
+    const builtin = @import("builtin");
+    if (builtin.os.tag == .windows) return;
+
+    const gpa = std.testing.allocator;
+    const env = std.process.getEnvVarOwned(gpa, "ZIG_ETHP2P_STRESS") catch return;
+    defer gpa.free(env);
+    if (!std.mem.eql(u8, env, "1")) return;
+    var payload: [10 * 1024]u8 = undefined;
+    fillPayload(&payload);
+
+    try runAbstractRsMesh(gpa, .{
+        .node_count = 6,
+        .edges = &topo_six_nodes,
+        .cfg = rsCfgDefault(),
+        .payload = &payload,
+        .max_rounds = 3_000_000,
+    });
+}

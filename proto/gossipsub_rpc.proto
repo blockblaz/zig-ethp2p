@@ -1,0 +1,18 @@
+// Vendored subset of libp2p pubsub RPC (field numbers must match upstream).
+// Full file: https://github.com/libp2p/go-libp2p-pubsub/blob/master/pb/rpc.proto
+syntax = "proto2";
+package pubsub.pb;
+
+message ControlIHave {
+  optional string topicID = 1;
+  repeated string messageIDs = 2;
+}
+
+message ControlIWant {
+  repeated string messageIDs = 1;
+}
+
+message ControlMessage {
+  repeated ControlIHave ihave = 1;
+  repeated ControlIWant iwant = 2;
+}

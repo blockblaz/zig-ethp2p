@@ -14,12 +14,13 @@ When updating:
    - `broadcast/pb/broadcast.proto`
    - `protocol/pb/protocol.proto`
    - `broadcast/rs/pb/rs.proto`
+   - `go-libp2p-pubsub/pb/rpc.proto` (for `proto/gossipsub_rpc.proto` field numbers; see `sim/gossipsub_rpc_pb.zig`)
 2. Run `zig build test` (golden bytes must still match `google.golang.org/protobuf` output from that tree).
 3. Bump the commit hash in this file.
 
 ## Abstract mesh tests
 
-`src/sim/rs_mesh.zig` runs the same RS **settings and graph topologies** as `sim/scenario_test.go` (`TestNetwork` RS / RS-ChunkLen) against `layer.RsStrategy` in-process (no libp2p, no Go simnet). `zig build test` and `zig build simtest` both execute them.
+`src/sim/rs_mesh.zig` runs the same RS **settings and graph topologies** as `sim/scenario_test.go` (`TestNetwork` RS / RS-ChunkLen) against `layer.RsStrategy` in-process (no libp2p, no Go simnet). `zig build test` and `zig build simtest` both execute them. With `ZIG_ETHP2P_STRESS=1` (see `zig build test-stress`), an additional 6-node case uses a higher round budget.
 
 ## Specifications
 

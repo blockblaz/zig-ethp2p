@@ -29,4 +29,10 @@ pub fn build(b: *std.Build) void {
 
     const simtest_step = b.step("simtest", "Abstract RS mesh (simnet-parity); same binary as test");
     simtest_step.dependOn(&run_lib_tests.step);
+
+    const run_stress = b.addRunArtifact(lib_tests);
+    run_stress.setEnvironmentVariable("ZIG_ETHP2P_STRESS", "1");
+    run_stress.has_side_effects = true;
+    const stress_step = b.step("test-stress", "Run tests with ZIG_ETHP2P_STRESS=1 (longer RS mesh)");
+    stress_step.dependOn(&run_stress.step);
 }
