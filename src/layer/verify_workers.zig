@@ -16,19 +16,30 @@ pub const VerifyJob = struct {
 };
 
 pub const VerifyWorkerPool = struct {
+    /// Thread-safe when `n_jobs > 0` (pool internals and per-job `dupe`).
     allocator: Allocator,
+    /// Allocator for `out.push` growth; must match whoever calls `VerifyQueue.deinit`.
+    queue_allocator: Allocator,
     pool: std.Thread.Pool,
     out: *verify_queue_mod.VerifyQueue,
     out_mutex: std.Thread.Mutex = .{},
 
-    pub fn init(allocator: Allocator, n_jobs: usize, out: *verify_queue_mod.VerifyQueue) !VerifyWorkerPool {
-        var pool: std.Thread.Pool = undefined;
-        try pool.init(.{ .allocator = allocator, .n_jobs = @as(?usize, n_jobs) });
-        return .{
-            .allocator = allocator,
-            .pool = pool,
+    /// Initializes `self` in place. Worker threads capture `&self.pool`; the `Thread.Pool` must not be
+    /// stack-copied after `init` (see `std.Thread.Pool.init`).
+    pub fn init(
+        self: *VerifyWorkerPool,
+        pool_allocator: Allocator,
+        queue_allocator: Allocator,
+        n_jobs: usize,
+        out: *verify_queue_mod.VerifyQueue,
+    ) !void {
+        self.* = .{
+            .allocator = pool_allocator,
+            .queue_allocator = queue_allocator,
+            .pool = undefined,
             .out = out,
         };
+        try self.pool.init(.{ .allocator = pool_allocator, .n_jobs = @as(?usize, n_jobs) });
     }
 
     pub fn deinit(self: *VerifyWorkerPool) void {
@@ -72,7 +83,7 @@ fn runOne(
 
     parent.out_mutex.lock();
     defer parent.out_mutex.unlock();
-    parent.out.push(parent.allocator, .{ .handle = handle, .verdict = verdict }) catch {
+    parent.out.push(parent.queue_allocator, .{ .handle = handle, .verdict = verdict }) catch {
         @panic("VerifyWorkerPool: out queue OOM");
     };
 }
@@ -84,7 +95,8 @@ test "verify worker pool inline pushes verdicts" {
     defer q.deinit(gpa);
 
     // No pool threads: testing allocator is single-threaded only. `verifyInline` still runs `runOne`.
-    var pool = try VerifyWorkerPool.init(gpa, 0, &q);
+    var pool: VerifyWorkerPool = undefined;
+    try pool.init(gpa, gpa, 0, &q);
     defer pool.deinit();
 
     var good: [32]u8 = undefined;
