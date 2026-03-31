@@ -3,6 +3,16 @@
 
 pub const wire = @import("wire/root.zig");
 
+/// Higher-level broadcast / RS helpers aligned with ethp2p `broadcast/` (not wire-only).
+pub const layer = struct {
+    pub const bitmap = @import("layer/bitmap.zig");
+    pub const broadcast_types = @import("layer/broadcast_types.zig");
+    pub const emit_planner = @import("layer/emit_planner.zig");
+    pub const rs_encode = @import("layer/rs_encode.zig");
+    pub const rs_init = @import("layer/rs_init.zig");
+};
+
 test {
     _ = wire;
+    _ = layer;
 }

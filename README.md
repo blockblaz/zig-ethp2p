@@ -14,7 +14,12 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | CHUNK uni-stream | [`broadcast/peer_ctrl.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/peer_ctrl.go) `doSendChunk`, [`peer_in.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/peer_in.go) `processChunk` | `wire.chunk_stream` |
 | RS `Preamble` / `ChunkIdent` | [`broadcast/rs/pb`](https://github.com/ethp2p/ethp2p/tree/main/broadcast/rs/pb), [`broadcast/rs/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/types.go) | `wire.rs`, `writeRsShardChunk` |
 | Protocol version constant | [`broadcast/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/types.go) `ProtocolV1` | `wire.constants.protocol_v1` |
-| **Not implemented** | [`broadcast/engine.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/engine.go), [`session.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/session.go), [`channel.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/channel.go), RS codec / strategy, sim, transport | — |
+| `Verdict` / `ChunkHandle` | [`broadcast/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/types.go) | `layer.broadcast_types` |
+| RS routing bitmap | [`broadcast/rs/bitmap.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/bitmap.go) | `layer.bitmap` |
+| RS `Config` / `initPreamble` | [`broadcast/rs/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/types.go) | `layer.rs_init` |
+| RS emit planner (fair dispatch heap) | [`broadcast/rs/emit.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/emit.go) | `layer.emit_planner` |
+| RS parity encode (klauspost-default matrix) | [klauspost/reedsolomon](https://github.com/klauspost/reedsolomon) via ethp2p RS strategy | `layer.rs_encode.encodeParity` |
+| **Not implemented** | [`broadcast/engine.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/engine.go), [`session.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/session.go), [`channel.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/channel.go), full RS strategy / decode / recovery, RLNC, sim, transport | — |
 
 ## Requirements
 
