@@ -301,7 +301,7 @@ test "abstract RS mesh six nodes env stress (ZIG_ETHP2P_STRESS=1)" {
     });
 }
 
-/// Larger graph than default six-node `TestNetwork` topology 1; only with `ZIG_ETHP2P_STRESS=1`.
+// Larger graph than default six-node TestNetwork topology 1; only with ZIG_ETHP2P_STRESS=1.
 test "abstract RS mesh eight nodes ring env stress (large-network scale)" {
     const builtin = @import("builtin");
     if (builtin.os.tag == .windows) return;
