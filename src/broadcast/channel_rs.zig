@@ -2,6 +2,8 @@
 
 const std = @import("std");
 const broadcast_types = @import("../layer/broadcast_types.zig");
+const dedup_mod = @import("../layer/dedup.zig");
+const dedup_registry_mod = @import("../layer/dedup_registry.zig");
 const rs_init = @import("../layer/rs_init.zig");
 const rs_strategy = @import("../layer/rs_strategy.zig");
 const Engine = @import("engine.zig").Engine;
@@ -105,6 +107,47 @@ pub const ChannelRs = struct {
         try self.sessions.put(self.allocator, mid, sess);
     }
 
+    /// Relay-side session for an existing preamble (same members as `publish`).
+    pub fn attachRelaySession(self: *ChannelRs, message_id: []const u8, preamble: *const rs_strategy.RsPreamble) !void {
+        if (self.sessions.get(message_id) != null) return error.DuplicateMessage;
+
+        const mid = try self.allocator.dupe(u8, message_id);
+        errdefer self.allocator.free(mid);
+
+        var strat = try RsStrategy.newRelay(self.allocator, self.cfg, preamble);
+        errdefer strat.deinit();
+
+        const n = self.members.items.len;
+        const member_ids = try self.allocator.alloc([]u8, n);
+        errdefer {
+            for (member_ids) |m| self.allocator.free(m);
+            self.allocator.free(member_ids);
+        }
+        const stats = try self.allocator.alloc(broadcast_types.PeerSessionStats, n);
+        errdefer self.allocator.free(stats);
+
+        for (0..n) |i| {
+            member_ids[i] = try self.allocator.dupe(u8, self.members.items[i]);
+            stats[i] = .{ .peer_id = member_ids[i] };
+            try strat.attachPeer(member_ids[i], &stats[i]);
+        }
+
+        const sess = try self.allocator.create(SessionRs);
+        errdefer {
+            sess.deinit();
+            self.allocator.destroy(sess);
+        }
+        sess.* = .{
+            .allocator = self.allocator,
+            .message_id = mid,
+            .strategy = strat,
+            .member_ids = member_ids,
+            .stats = stats,
+        };
+
+        try self.sessions.put(self.allocator, mid, sess);
+    }
+
     pub fn sessionDrainOutbound(self: *ChannelRs, message_id: []const u8) !usize {
         const slot = self.sessions.getPtr(message_id) orelse return error.UnknownMessage;
         return slot.*.drainOutbound();
@@ -118,6 +161,26 @@ pub const ChannelRs = struct {
     pub fn sessionStrategy(self: *ChannelRs, message_id: []const u8) ?*RsStrategy {
         const slot = self.sessions.getPtr(message_id) orelse return null;
         return &slot.*.strategy;
+    }
+
+    /// Ingest a relay chunk: optional cross-session dedup, then `takeChunk`.
+    pub fn relayIngestChunk(
+        self: *ChannelRs,
+        registry: ?*dedup_registry_mod.DedupRegistry,
+        message_id: []const u8,
+        peer: []const u8,
+        chunk_id: rs_strategy.ChunkIdent,
+        data: []const u8,
+        dedup: ?*broadcast_types.DedupCancel,
+    ) (Allocator.Error || error{UnknownMessage})!broadcast_types.ChunkIngestResult {
+        const strat = self.sessionStrategy(message_id) orelse return error.UnknownMessage;
+        if (registry) |reg| {
+            const first = try reg.claim(self.allocator, self.id, message_id, chunk_id.index);
+            if (!first) {
+                return .{ .verdict = .redundant, .complete = false };
+            }
+        }
+        return strat.takeChunk(peer, chunk_id, data, dedup);
     }
 };
 
@@ -147,4 +210,64 @@ test "channel publish and drain to one member" {
     const decoded = try ch.sessionDecode("m1");
     defer gpa.free(decoded);
     try std.testing.expectEqualSlices(u8, &payload, decoded);
+}
+
+test "relay ingest registry blocks second claim same chunk index" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.init(gpa, "local", .{});
+    defer eng.deinit();
+
+    const cfg = RsConfig{
+        .data_shards = 4,
+        .parity_shards = 2,
+        .chunk_len = 0,
+        .bitmap_threshold = 0,
+        .forward_multiplier = 4,
+        .disable_bitmap = false,
+    };
+
+    const ch = try eng.attachChannelRs("topic", cfg);
+    try ch.addMember("peerA");
+    try ch.addMember("peerB");
+
+    const payload = [_]u8{ 9, 8, 7 };
+    var origin = try RsStrategy.newOrigin(gpa, cfg, &payload);
+    defer origin.deinit();
+
+    try ch.attachRelaySession("m1", &origin.preamble);
+
+    var reg: dedup_registry_mod.DedupRegistry = .{};
+    defer reg.deinit(gpa);
+
+    const chunk0 = origin.chunks[0];
+
+    var ga: dedup_mod.DedupGroup = .{};
+    var ta = ga.token();
+    const r1 = try ch.relayIngestChunk(&reg, "m1", "peerA", .{ .index = 0 }, chunk0, ta.dedupPtr());
+    try std.testing.expectEqual(broadcast_types.Verdict.accepted, r1.verdict);
+    try std.testing.expect(ga.fired);
+
+    const r2 = try ch.relayIngestChunk(&reg, "m1", "peerB", .{ .index = 0 }, chunk0, null);
+    try std.testing.expectEqual(broadcast_types.Verdict.redundant, r2.verdict);
+}
+
+test "relayIngestChunk unknown message" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.init(gpa, "local", .{ .enable_cross_session_dedup = true });
+    defer eng.deinit();
+
+    const cfg = RsConfig{
+        .data_shards = 4,
+        .parity_shards = 2,
+        .chunk_len = 0,
+        .bitmap_threshold = 0,
+        .forward_multiplier = 4,
+        .disable_bitmap = false,
+    };
+
+    const ch = try eng.attachChannelRs("topic", cfg);
+    try std.testing.expectError(
+        error.UnknownMessage,
+        ch.relayIngestChunk(eng.dedupRegistryPtr(), "missing", "peer", .{ .index = 0 }, &.{}, null),
+    );
 }

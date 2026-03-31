@@ -16,7 +16,10 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | Protocol version constant | [`broadcast/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/types.go) `ProtocolV1` | `wire.constants.protocol_v1` |
 | `Verdict` / `ChunkHandle` | [`broadcast/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/types.go) | `layer.broadcast_types` |
 | `DedupCancel` + `DedupGroup` token (session hook) | session → strategy `takeChunk` | `layer.broadcast_types`, `layer.dedup` |
+| Engine-wide dedup registry (`channel` + `message` + chunk index) | multi-peer ingest dedup | `layer.dedup_registry`, `Engine.enable_cross_session_dedup` |
 | Verify result FIFO (single-threaded `Verified()` shim) | async verify channels | `layer.verify_queue` |
+| Verify worker pool (SHA256 vs preamble hash → queue) | background verify workers | `layer.verify_workers` |
+| Relay session attach + `relayIngestChunk` | relay ingest path | `broadcast.channel_rs` |
 | RS routing bitmap | [`broadcast/rs/bitmap.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/bitmap.go) | `layer.bitmap` |
 | RS `Config` / `initPreamble` | [`broadcast/rs/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/types.go) | `layer.rs_init` |
 | RS emit planner (fair dispatch heap) | [`broadcast/rs/emit.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/emit.go) | `layer.emit_planner` |
@@ -29,15 +32,15 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | App payload envelope entry point (re-export) | `encodeGossipsubMessage` | `broadcast.gossip` |
 | Gossipsim cross-checks (golden envelope, mesh fanout, `broadcast.gossip` vs transport) | — | `sim.gossipsub_interop` |
 | Gossipsub `ControlIHave` / `ControlIWant` protobuf bodies (subset of [libp2p `rpc.proto`](https://github.com/libp2p/go-libp2p-pubsub/blob/master/pb/rpc.proto)) | `ControlMessage` nested fields | `sim.gossipsub_rpc_pb`, `proto/gossipsub_rpc.proto` |
-| **Not in scope yet** | Full `RPC` / stream framing for libp2p, QUIC simnet host, RLNC, true async verify goroutines | — (see **Pending work** below) |
+| **Not in scope yet** | Full `RPC` / stream framing for libp2p, QUIC simnet host, RLNC, Go-parity verify pipeline wiring | — (see **Pending work** below) |
 
 ## Pending work
 
-What is **in tree today**: wire + layer RS strategy, `layer.dedup` / `layer.verify_queue`, `broadcast.*` (engine / RS channel / session / `gossip`), abstract RS mesh (2-, 4-, 6-node + optional **stress**), gossipsim stack, and **hand-written** encode/decode for gossipsub `ControlIHave` / `ControlIWant` message bodies (`sim.gossipsub_rpc_pb`). Default `zig build test` stays fast.
+What is **in tree today**: wire + layer RS strategy, `layer.dedup` / `layer.dedup_registry` / `layer.verify_queue` / `layer.verify_workers`, `broadcast.*` (engine / RS channel / session / `gossip`, relay ingest helpers), abstract RS mesh (2-, 4-, 6-node + optional **stress**), gossipsim stack, and **hand-written** encode/decode for gossipsub `ControlIHave` / `ControlIWant` message bodies (`sim.gossipsub_rpc_pb`). Default `zig build test` stays fast.
 
 What is **still open** (not exhaustive):
 
-- **Broadcast parity with Go**: No full multi-peer dedup **registry**, background verify workers, or RLNC / extra `Scheme` types.
+- **Broadcast parity with Go**: Dedup registry + verify pool are library primitives; no full session/registry wiring like production Go yet. RLNC / extra `Scheme` types still out.
 - **Real gossipsub / simnet**: No **[marcopolo/simnet](https://github.com/marcopolo/simnet)** or libp2p host; no full `RPC` protobuf framing on the wire.
 - **Huge RS scenarios**: Go’s `TestLargeNetwork_RS` / `TestScalability` scale is not mirrored; use `zig build test-stress` (sets `ZIG_ETHP2P_STRESS=1`) for an extra 6-node mesh budget, or raise rounds locally.
 - **RLNC and other EC schemes**: Out of tree until needed.

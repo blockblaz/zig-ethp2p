@@ -22,7 +22,9 @@ pub const layer = struct {
     pub const rs_init = @import("layer/rs_init.zig");
     pub const rs_strategy = @import("layer/rs_strategy.zig");
     pub const dedup = @import("layer/dedup.zig");
+    pub const dedup_registry = @import("layer/dedup_registry.zig");
     pub const verify_queue = @import("layer/verify_queue.zig");
+    pub const verify_workers = @import("layer/verify_workers.zig");
 };
 
 /// Session / engine / RS channel stack aligned with ethp2p `broadcast/` (single-threaded `drive` style).
@@ -38,7 +40,9 @@ test {
     _ = wire;
     _ = layer;
     _ = layer.dedup;
+    _ = layer.dedup_registry;
     _ = layer.verify_queue;
+    _ = layer.verify_workers;
     _ = sim.rs_mesh;
     _ = sim.gossipsub_transport;
     _ = sim.gossipsub_protocol;
