@@ -42,7 +42,7 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 
 ## Pending work
 
-**On `main` today:** wire + layer RS strategy; `layer.dedup` / `layer.dedup_registry` / `layer.verify_queue` / `layer.verify_workers`; `broadcast.*` (engine, channel, `relay_async_verify`, verified + unverified relay ingest); abstract RS mesh (**heap-backed**, 2-, 4-, 6-node default; **stress** adds higher six-node budget plus **8- and 16-node rings**); gossipsim stack; gossipsub **`RPC`** (`encodeRpc` / `decodeRpcOwned` including **`partial` / `PartialMessagesExtension`**), **full `ControlMessage`**, **length-prefixed** framing, and **`gossipsub_rpc_host`** in-process duplex for tests. CI enforces `build.zig.zon` `minimum_zig_version` vs workflow `ZIG_VERSION`; `just check-zig-ci-align` matches locally. Default `zig build test` stays fast.
+**On `main` today:** wire + layer RS strategy; `layer.dedup` / `layer.dedup_registry` / `layer.verify_queue` / `layer.verify_workers`; `broadcast.*` (engine, channel, `relay_async_verify`, verified + unverified relay ingest); abstract RS mesh (**heap-backed**, 2-, 4-, 6-node default; **stress** adds higher six-node budget plus **8- and 16-node rings**); gossipsim stack; gossipsub **`RPC`** (`encodeRpc` / `decodeRpcOwned` including **`partial` / `PartialMessagesExtension`**), **full `ControlMessage`**, **length-prefixed** framing, and **`gossipsub_rpc_host`** in-process duplex for tests. CI mirrors [ethp2p’s workflow](https://github.com/ethp2p/ethp2p/blob/main/.github/workflows/ci.yml): parallel `test-broadcast`, `test-sim-rs`, `test-sim-gossipsub` (Debug + TSan), `test-stress-ci` on `main` only, plus lint (`fmt`, `zig build`, `ast-check`). `build.zig.zon` `minimum_zig_version` must match workflow `ZIG_VERSION`; `just check-zig-ci-align` matches locally. For a single local run of everything, use `zig build test`.
 
 **Open issues** (roadmap, not exhaustive):
 
@@ -58,9 +58,13 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 
 ```sh
 zig build
-zig build test         # wire, layer, broadcast, sim (default CI)
-zig build simtest      # alias of `test` (mesh-focused name)
-zig build test-stress  # `ZIG_ETHP2P_STRESS=1` (longer RS mesh + 8-/16-node ring cases)
+zig build test              # full suite (wire, layer, broadcast, sim)
+zig build simtest           # alias of `test` (mesh-focused name)
+zig build test-stress       # `ZIG_ETHP2P_STRESS=1` (longer RS mesh + 8-/16-node ring cases)
+zig build test-broadcast    # CI split: wire + layer + broadcast (TSan)
+zig build test-sim-rs       # CI split: RS mesh (TSan)
+zig build test-sim-gossipsub
+zig build test-stress-ci    # full suite + stress + TSan (same as `large-network-rs` on main)
 ```
 
 Add as a dependency and import the module `zig_ethp2p` (see `build.zig`).
