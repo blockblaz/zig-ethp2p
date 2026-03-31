@@ -1,0 +1,15 @@
+.{
+    .name = .zig_ethp2p,
+    .version = "0.0.0",
+    .fingerprint = 0xbeef30331296c64d,
+    .minimum_zig_version = "0.15.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "proto",
+        "UPSTREAM.md",
+        "README.md",
+        "LICENSE",
+    },
+}
