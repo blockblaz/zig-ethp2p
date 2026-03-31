@@ -1,0 +1,32 @@
+# Zig toolchain: keep ZIG_VERSION in sync with `minimum_zig_version` in build.zig.zon.
+#
+# `zig build test` includes abstract RS mesh tests (`src/sim/rs_mesh.zig`) that mirror ethp2p
+# `sim/scenario_test.go` RS topologies against zig-ethp2p's `RsStrategy` (no Go/libp2p).
+
+name: CI
+
+on:
+  push:
+    branches: [main, feature]
+  pull_request:
+    branches: [main, feature]
+
+env:
+  ZIG_VERSION: 0.15.0
+
+jobs:
+  zig:
+    name: Lint & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: zig fmt --check
+        run: zig fmt --check .
+
+      - name: zig build test
+        run: zig build test --summary all

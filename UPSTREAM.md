@@ -17,6 +17,10 @@ When updating:
 2. Run `zig build test` (golden bytes must still match `google.golang.org/protobuf` output from that tree).
 3. Bump the commit hash in this file.
 
+## Abstract mesh tests
+
+`src/sim/rs_mesh.zig` runs the same RS **settings and graph topologies** as `sim/scenario_test.go` (`TestNetwork` RS / RS-ChunkLen) against `layer.RsStrategy` in-process (no libp2p, no Go simnet). `zig build test` and `zig build simtest` both execute them.
+
 ## Specifications
 
 Normative docs: [ethp2p/specs](https://github.com/ethp2p/ethp2p/tree/main/specs) (architecture `001-ethp2p`, broadcast `002`–`004`).

@@ -14,7 +14,26 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | CHUNK uni-stream | [`broadcast/peer_ctrl.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/peer_ctrl.go) `doSendChunk`, [`peer_in.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/peer_in.go) `processChunk` | `wire.chunk_stream` |
 | RS `Preamble` / `ChunkIdent` | [`broadcast/rs/pb`](https://github.com/ethp2p/ethp2p/tree/main/broadcast/rs/pb), [`broadcast/rs/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/types.go) | `wire.rs`, `writeRsShardChunk` |
 | Protocol version constant | [`broadcast/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/types.go) `ProtocolV1` | `wire.constants.protocol_v1` |
-| **Not implemented** | [`broadcast/engine.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/engine.go), [`session.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/session.go), [`channel.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/channel.go), RS codec / strategy, sim, transport | — |
+| `Verdict` / `ChunkHandle` | [`broadcast/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/types.go) | `layer.broadcast_types` |
+| RS routing bitmap | [`broadcast/rs/bitmap.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/bitmap.go) | `layer.bitmap` |
+| RS `Config` / `initPreamble` | [`broadcast/rs/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/types.go) | `layer.rs_init` |
+| RS emit planner (fair dispatch heap) | [`broadcast/rs/emit.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/emit.go) | `layer.emit_planner` |
+| RS parity encode (klauspost-default matrix) | [klauspost/reedsolomon](https://github.com/klauspost/reedsolomon) via ethp2p RS strategy | `layer.rs_encode`, `ReedSolomon`, `decodeMessage` |
+| RS unified strategy (per-session) | [`broadcast/rs/strategy.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/strategy.go) | `layer.rs_strategy` |
+| Abstract RS mesh (strategy-only, same topologies as Go `TestNetwork` RS) | [`sim/scenario_test.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/scenario_test.go) | `sim.rs_mesh`, `zig build simtest` |
+| **Not in scope yet** | [`broadcast/engine.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/engine.go), [`session.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/session.go), [`channel.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/channel.go), RLNC, full Go simnet stack, transport | — (see **Pending work** below) |
+
+## Pending work
+
+Items to tackle later; not an exhaustive roadmap.
+
+- **Broadcast session stack**: Port or wrap the reference **session / engine / channel** model (`session.go`, `engine.go`, `channel.go`) so chunk lifecycle, dedup, and routing ticks match ethp2p end-to-end (today only the RS **strategy** API is mirrored in Zig).
+- **Gossipsub strategy**: No Zig analogue of ethp2p’s gossipsub broadcast path or `TestNetwork/Gossipsub` in `sim/scenario_test.go`; add strategy + tests when that layer is needed.
+- **Go simnet parity**: No integration with **[marcopolo/simnet](https://github.com/marcopolo/simnet)** / libp2p / QUIC. Abstract mesh tests deliberately avoid UDP and real latency; a future step is driving **this** library from a real network sim or FFI if we need byte-identical timing traces.
+- **Large / stress scenarios**: Go CI runs `TestLargeNetwork_RS` and `TestScalability` on `main` only; Zig has no equivalent long-run or scale tests yet.
+- **RLNC and other schemes**: Reference may grow beyond RS; RLNC and additional `broadcast.Scheme` implementations are out of tree.
+- **Async verification**: Reference `Strategy.Verified()` / `VerifyResult` channels are not modeled; `DedupCancel` in Zig uses a minimal callback shape.
+- **Docs / ops**: Expand `UPSTREAM.md` when protos or golden vectors change; keep `minimum_zig_version` and CI `ZIG_VERSION` in sync.
 
 ## Requirements
 
@@ -24,7 +43,8 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 
 ```sh
 zig build
-zig build test
+zig build test      # includes wire, layer, and abstract RS mesh tests
+zig build simtest   # same test binary as `test` (explicit name for mesh-focused runs)
 ```
 
 Add as a dependency and import the module `zig_ethp2p` (see `build.zig`).
