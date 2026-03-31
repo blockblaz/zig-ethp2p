@@ -21,6 +21,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: minimum_zig_version matches CI ZIG_VERSION
+        run: |
+          set -euo pipefail
+          want="${ZIG_VERSION}"
+          got="$(sed -n 's/^[[:space:]]*\.minimum_zig_version = "\([^"]*\)".*/\1/p' build.zig.zon | head -1)"
+          if test -z "$got"; then
+            echo "error: could not parse minimum_zig_version from build.zig.zon" >&2
+            exit 1
+          fi
+          if test "$got" != "$want"; then
+            echo "error: build.zig.zon minimum_zig_version=${got} but CI ZIG_VERSION=${want}" >&2
+            exit 1
+          fi
+
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}

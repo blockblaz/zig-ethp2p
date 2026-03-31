@@ -2,11 +2,17 @@
 
 This repository tracks **[ethp2p](https://github.com/ethp2p/ethp2p)**.
 
+## Zig toolchain
+
+`build.zig.zon` `minimum_zig_version` must match the `ZIG_VERSION` environment variable in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). CI fails the job if they differ, so bump both when raising the supported Zig release.
+
 ## Pinned revision
 
 The vendored `.proto` files and golden test vectors were checked against reference commit:
 
 `125bdaa3985a8cbe9f24d53155828312777b73fc`
+
+As of the last maintenance pass, **ethp2p** `main` still points at this commit, so `proto/*.proto` matched `broadcast/pb/`, `protocol/pb/`, and `broadcast/rs/pb/` in that tree without edits.
 
 When updating:
 
