@@ -39,6 +39,7 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | `PartialMessagesExtension` (nested in `RPC.partial`) | libp2p `rpc.proto` field 10 body | `encodePartialMessagesExtension`, `decodePartialMessagesExtensionOwned` |
 | Unsigned-varint length prefix before `RPC` body | common libp2p framing | `encodeRpcLengthPrefixed`, `decodeRpcLengthPrefixedPrefix` |
 | In-process duplex for length-prefixed `RPC` (simnet-style, no TCP/QUIC) | pair of `Endpoint`s over bounded byte queues | `sim.gossipsub_rpc_host` (`Link`, `Endpoint.sendRpc` / `recvRpcOwned`) |
+| QUIC transport (**scaffold** — ALPN `eth-ec-broadcast`, config shape, UDP bind smoke test; no TLS/QUIC stack linked) | [`sim/host.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/host.go) `QUICHost`, `defaultQuicConfig` | `transport.eth_ec_quic` |
 | **Still open** | — | [Pending work](#pending-work) |
 
 ## Scope on `main` (at a glance)
@@ -51,6 +52,7 @@ This is **what is already implemented**—not the backlog. Per-module mapping an
 - **EC scheme id:** `layer.ec_scheme` (`EcSchemeKind`, `"reed-solomon"` wire name); only Reed–Solomon is wired end-to-end ([#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) tracks RLNC and further schemes).
 - **Abstract RS mesh:** heap-backed graphs and `PeerSessionStats` (`sim.rs_mesh`): 2-node, 4-node ring, 6-node `TestNetwork`-style topology, **partition/heal** line test, chunk-len variant; with `ZIG_ETHP2P_STRESS=1`, larger six-node budget plus **8-** and **16-node** rings.
 - **Gossipsub (sim / wire helpers):** transport, protocol, broadcast, interop, `RPC` encode/decode (including **`partial`** / `PartialMessagesExtension`), full `ControlMessage`, varint length prefix, in-process **`gossipsub_rpc_host`** for tests (`sim.gossipsub_*`, `broadcast.gossip`).
+- **QUIC (experimental):** `transport.eth_ec_quic` — ALPN and tunables aligned with ethp2p’s illustrative QUIC host; `listen` / `dial` not implemented until a QUIC+TLS dependency is integrated.
 - **CI:** aligned with [ethp2p’s `ci.yml`](https://github.com/ethp2p/ethp2p/blob/main/.github/workflows/ci.yml): `zig build test-broadcast`, `test-sim-rs`, `test-sim-gossipsub` (Debug + TSan), `test-stress-ci` on **`main` only**, plus lint (`zig fmt --check`, `zig build`, `zig ast-check`). `build.zig.zon` **`minimum_zig_version`** must match workflow **`ZIG_VERSION`**; `just check-zig-ci-align` checks that locally.
 - **One-shot local verification:** `zig build test` runs the full suite.
 
@@ -58,7 +60,7 @@ This is **what is already implemented**—not the backlog. Per-module mapping an
 
 What is **not** covered yet (the [implementation table](#implementation-status-vs-reference) remains authoritative for details):
 
-- **Transport:** production libp2p/QUIC (ethp2p’s in-repo QUIC is illustrative; this repo stays strategy + wire + sim helpers).
+- **Transport:** full **QUIC + TLS 1.3** stack, stream wiring to `wire.*`, and production **libp2p** integration — beyond `transport.eth_ec_quic` scaffold (see module doc for candidate deps and CI notes).
 - **Gossipsub `RPC`:** protobuf extension fields beyond **`partial`** / `PartialMessagesExtension` (field 10).
 - **Erasure coding:** `layer.ec_scheme` holds the scheme enum and `"reed-solomon"` wire name; **RLNC** (strategy, preamble, chunk layout) and any further `Scheme` types remain ([#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14)).
 - **Engine:** optional channel-style event loop / `VerdictPending` for non-RS schemes.

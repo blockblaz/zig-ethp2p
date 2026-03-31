@@ -1,6 +1,7 @@
 //! Zig implementation of [ethp2p](https://github.com/ethp2p/ethp2p) wire formats.
 //! Behavior is validated against the reference Go stack; see `UPSTREAM.md`.
 //! Split CI test roots live in `ci_root_broadcast.zig`, `ci_root_sim_rs.zig`, and `ci_root_sim_gossipsub.zig`; update them when adding tests under those areas.
+//! Experimental QUIC transport scaffolding: `transport.eth_ec_quic`.
 
 pub const wire = @import("wire/root.zig");
 
@@ -32,6 +33,11 @@ pub const layer = struct {
 };
 
 /// Session / engine / RS channel stack aligned with ethp2p `broadcast/` (single-threaded `drive` style).
+/// Production-style transport (QUIC) — see `transport/eth_ec_quic.zig`; not yet wired to `wire.*` sessions.
+pub const transport = struct {
+    pub const eth_ec_quic = @import("transport/eth_ec_quic.zig");
+};
+
 pub const broadcast = struct {
     pub const observer = @import("broadcast/observer.zig");
     pub const engine = @import("broadcast/engine.zig");
@@ -43,6 +49,7 @@ pub const broadcast = struct {
 
 test {
     _ = wire;
+    _ = transport.eth_ec_quic;
     _ = layer;
     _ = layer.dedup;
     _ = layer.dedup_registry;
