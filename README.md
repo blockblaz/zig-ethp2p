@@ -45,7 +45,7 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 
 | Issue | Topic |
 |-------|-------|
-| [#12](https://github.com/ch4r10t33r/zig-ethp2p/issues/12) | Full gossipsub `RPC`, libp2p streams, simnet/QUIC-style host |
+| [#12](https://github.com/ch4r10t33r/zig-ethp2p/issues/12) | Libp2p streams, simnet/QUIC-style host, remaining gossipsub `RPC` extensions (`partial`, …) |
 | [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) | RLNC and additional EC `Scheme` types |
 
 ## Requirements
