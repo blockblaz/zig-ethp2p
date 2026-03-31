@@ -33,22 +33,23 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | Encode + fanout helper | `GossipsubNode.Publish` + topic delivery | `sim.gossipsub_broadcast` |
 | App payload envelope entry point (re-export) | `encodeGossipsubMessage` | `broadcast.gossip` |
 | Gossipsim cross-checks (golden envelope, mesh fanout, `broadcast.gossip` vs transport) | — | `sim.gossipsub_interop` |
-| Gossipsub `ControlIHave` / `ControlIWant` protobuf bodies (subset of [libp2p `rpc.proto`](https://github.com/libp2p/go-libp2p-pubsub/blob/master/pb/rpc.proto)) | `ControlMessage` nested fields | `sim.gossipsub_rpc_pb`, `proto/gossipsub_rpc.proto` |
-| Gossipsub top-level `RPC` with `control` only (field 3) | length-delimited `RPC` shell for stream payloads | `sim.gossipsub_rpc_pb` (`encodeRpcEnvelopeControl`, `decodeRpcControlOnly`) |
-| **Still open** (see [issues](#pending-work)) | Full gossipsub `RPC`, libp2p/simnet host, RLNC, optional channel-style event loop / `VerdictPending` for non-RS schemes | — |
+| Gossipsub `ControlIHave` / `ControlIWant` / `ControlGraft` / `ControlPrune` / `ControlIDontWant`, full `ControlMessage` | [libp2p `rpc.proto`](https://github.com/libp2p/go-libp2p-pubsub/blob/master/pb/rpc.proto) | `sim.gossipsub_rpc_pb`, `proto/gossipsub_rpc.proto` |
+| Gossipsub top-level `RPC` (`subscriptions`, `publish`, `control`) + control-only envelope | stream payloads; unknown RPC fields skipped | `sim.gossipsub_rpc_pb` (`encodeRpc` / `decodeRpcOwned`, `encodeRpcEnvelopeControl`, `decodeRpcControlOnly`) |
+| Unsigned-varint length prefix before `RPC` body | common libp2p framing | `encodeRpcLengthPrefixed`, `decodeRpcLengthPrefixedPrefix` |
+| **Still open** (see [issues](#pending-work)) | libp2p/simnet test host, `RPC` extensions (`partial`, …), RLNC, optional channel-style event loop / `VerdictPending` for non-RS schemes | — |
 
 ## Pending work
 
-**On `main` today:** wire + layer RS strategy; `layer.dedup` / `layer.dedup_registry` / `layer.verify_queue` / `layer.verify_workers`; `broadcast.*` (engine, channel, `relay_async_verify`, verified + unverified relay ingest); abstract RS mesh (**heap-backed**, 2-, 4-, 6-node default; **stress** adds higher six-node budget plus **8- and 16-node rings**); gossipsim stack; gossipsub `ControlIHave` / `ControlIWant` plus **`RPC` control-only envelope** helpers in `sim.gossipsub_rpc_pb`. CI enforces `build.zig.zon` `minimum_zig_version` vs workflow `ZIG_VERSION`; `just check-zig-ci-align` matches locally. Default `zig build test` stays fast.
+**On `main` today:** wire + layer RS strategy; `layer.dedup` / `layer.dedup_registry` / `layer.verify_queue` / `layer.verify_workers`; `broadcast.*` (engine, channel, `relay_async_verify`, verified + unverified relay ingest); abstract RS mesh (**heap-backed**, 2-, 4-, 6-node default; **stress** adds higher six-node budget plus **8- and 16-node rings**); gossipsim stack; gossipsub **`RPC` fields 1–3** (`encodeRpc` / `decodeRpcOwned`, unknown fields skipped), **full `ControlMessage`**, **length-prefixed** RPC framing in `sim.gossipsub_rpc_pb`. CI enforces `build.zig.zon` `minimum_zig_version` vs workflow `ZIG_VERSION`; `just check-zig-ci-align` matches locally. Default `zig build test` stays fast.
 
-**Suggested next:** [#12](https://github.com/ch4r10t33r/zig-ethp2p/issues/12) — full gossipsub `RPC`, libp2p streams, simnet/QUIC-style host.
+**Suggested next:** [#12](https://github.com/ch4r10t33r/zig-ethp2p/issues/12) — libp2p streams, simnet/QUIC-style host, remaining `RPC` extensions.
 
 **Tracked issues** (roadmap, not exhaustive):
 
 | Issue | Status / topic |
 |-------|----------------|
 | [#11](https://github.com/ch4r10t33r/zig-ethp2p/issues/11) | **Closed** — engine dedup + async verify ingest (`relayIngestChunk*Engine`, `RelayAsyncVerifier.initBound`, `sessionDecodeClearEngineDedup`); RS verify stays sync (no `VerdictPending`) |
-| [#12](https://github.com/ch4r10t33r/zig-ethp2p/issues/12) | Open — full gossipsub `RPC`, libp2p streams, simnet/QUIC-style host |
+| [#12](https://github.com/ch4r10t33r/zig-ethp2p/issues/12) | Open — **partial:** `RPC` 1–3 + full `ControlMessage` + varint length prefix in `gossipsub_rpc_pb`; **still:** simnet/libp2p host, `partial`/extensions |
 | [#13](https://github.com/ch4r10t33r/zig-ethp2p/issues/13) | **Closed** — heap-backed `sim/rs_mesh` (`MaxMeshNodes`), 16-node ring stress (Go `TestNetwork` remains the default topology reference) |
 | [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) | Open — RLNC and additional EC `Scheme` types |
 | [#15](https://github.com/ch4r10t33r/zig-ethp2p/issues/15) | **Closed** — `UPSTREAM.md` Zig toolchain note, CI `minimum_zig_version` check, `just check-zig-ci-align` |
