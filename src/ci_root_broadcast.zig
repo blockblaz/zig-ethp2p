@@ -2,6 +2,7 @@
 //! When adding `broadcast/` modules or layer test files, keep this aligned with `src/root.zig` (excluding `sim`).
 
 test {
+    _ = @import("transport/eth_ec_quic.zig");
     _ = @import("wire/root.zig");
     _ = @import("layer/bitmap.zig");
     _ = @import("layer/dedup.zig");

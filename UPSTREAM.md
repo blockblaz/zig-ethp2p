@@ -24,6 +24,10 @@ When updating:
 2. Run `zig build test` (golden bytes must still match `google.golang.org/protobuf` output from that tree).
 3. Bump the commit hash in this file.
 
+## QUIC / UDP transport
+
+`src/transport/eth_ec_quic.zig` mirrors **ALPN** `eth-ec-broadcast` and high-level **quic-go-style** limits from ethp2p `sim/host.go`. It does not link a QUIC implementation yet; integrating something like [`gitlab.com/devnw/zig/quic`](https://gitlab.com/devnw/zig/quic) implies extra system libs (e.g. OpenSSL on Linux/macOS in that tree), likely Zig **0.15.1+**, and CI image updates—prefer an opt-in `build.zig` step until stable.
+
 ## EC schemes (issue [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14))
 
 `src/layer/ec_scheme.zig` defines `EcSchemeKind` and the `"reed-solomon"` string aligned with `broadcast/rs/types.go` `NewScheme`. Only Reed–Solomon is implemented end-to-end; RLNC needs spec’d preamble / chunk types and a strategy implementation before wire changes.
