@@ -8,6 +8,7 @@ pub const sim = struct {
     pub const rs_mesh = @import("sim/rs_mesh.zig");
     pub const gossipsub_transport = @import("sim/gossipsub_transport.zig");
     pub const gossipsub_protocol = @import("sim/gossipsub_protocol.zig");
+    pub const gossipsub_broadcast = @import("sim/gossipsub_broadcast.zig");
 };
 
 /// Higher-level broadcast / RS helpers aligned with ethp2p `broadcast/` (not wire-only).
@@ -26,6 +27,7 @@ pub const broadcast = struct {
     pub const engine = @import("broadcast/engine.zig");
     pub const channel_rs = @import("broadcast/channel_rs.zig");
     pub const session_rs = @import("broadcast/session_rs.zig");
+    pub const gossip = @import("broadcast/gossip.zig");
 };
 
 test {
@@ -34,8 +36,10 @@ test {
     _ = sim.rs_mesh;
     _ = sim.gossipsub_transport;
     _ = sim.gossipsub_protocol;
+    _ = sim.gossipsub_broadcast;
     _ = broadcast.engine;
     _ = broadcast.channel_rs;
     _ = broadcast.session_rs;
     _ = broadcast.observer;
+    _ = broadcast.gossip;
 }
