@@ -26,7 +26,7 @@ When updating:
 
 ## Abstract mesh tests
 
-`src/sim/rs_mesh.zig` runs the same RS **settings and graph topologies** as `sim/scenario_test.go` (`TestNetwork` RS / RS-ChunkLen) against `layer.RsStrategy` in-process (no libp2p, no Go simnet). Adjacency and per-peer stats are **heap-allocated** (`MaxMeshNodes` cap). `zig build test` and `zig build simtest` both execute them. With `ZIG_ETHP2P_STRESS=1` (see `zig build test-stress`), extra cases use higher round budgets and add **8- and 16-node** ring graphs beyond the Go file’s largest fixed topology.
+`src/sim/rs_mesh.zig` runs the same RS **settings and graph topologies** as `sim/scenario_test.go` (`TestNetwork` RS / RS-ChunkLen) against `layer.RsStrategy` in-process (no libp2p, no Go simnet). Adjacency and per-peer stats are **heap-allocated** (`MaxMeshNodes` cap). `MeshParams.partition` drops selected undirected links for an initial round range (no chunks / routing across them), then restores them—this matches the **intent** of ethp2p CI’s `TestNodeReconnection` name in the `simnet-rs` job (that test does not exist on ethp2p `main` today). `zig build test` and `zig build simtest` both execute these cases. With `ZIG_ETHP2P_STRESS=1` (see `zig build test-stress`), extra cases use higher round budgets and add **8- and 16-node** ring graphs beyond the Go file’s largest fixed topology.
 
 ## Specifications
 
