@@ -27,6 +27,17 @@ fmt:
 fmt-check:
     zig fmt --check .
 
+# Same assertion as CI: parse ZIG_VERSION from the workflow file and compare to build.zig.zon.
+check-zig-ci-align:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    want="$(sed -n 's/^[[:space:]]*ZIG_VERSION: \([^[:space:]]*\).*/\1/p' .github/workflows/ci.yml | head -1)"
+    test -n "$want" || { echo "could not parse ZIG_VERSION from .github/workflows/ci.yml"; exit 1; }
+    got="$(sed -n 's/^[[:space:]]*\.minimum_zig_version = "\([^"]*\)".*/\1/p' build.zig.zon | head -1)"
+    test -n "$got" || { echo "could not parse build.zig.zon"; exit 1; }
+    test "$got" = "$want" || { echo "build.zig.zon minimum_zig_version=$got, ci.yml ZIG_VERSION=$want"; exit 1; }
+    echo "OK: minimum_zig_version=$got"
+
 # Local Zig caches and install prefix only.
 clean:
     rm -rf .zig-cache zig-out
