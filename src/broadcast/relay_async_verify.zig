@@ -54,7 +54,7 @@ pub const RelayAsyncVerifier = struct {
             .out_q = .{},
             .pool = undefined,
         };
-        self.pool = try verify_workers_mod.VerifyWorkerPool.init(pool_alloc, n_jobs, &self.out_q);
+        try self.pool.init(pool_alloc, n_jobs, &self.out_q);
         return self;
     }
 

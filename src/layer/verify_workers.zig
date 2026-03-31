@@ -21,14 +21,15 @@ pub const VerifyWorkerPool = struct {
     out: *verify_queue_mod.VerifyQueue,
     out_mutex: std.Thread.Mutex = .{},
 
-    pub fn init(allocator: Allocator, n_jobs: usize, out: *verify_queue_mod.VerifyQueue) !VerifyWorkerPool {
-        var pool: std.Thread.Pool = undefined;
-        try pool.init(.{ .allocator = allocator, .n_jobs = @as(?usize, n_jobs) });
-        return .{
+    /// Initializes `self` in place. Worker threads capture `&self.pool`; the `Thread.Pool` must not be
+    /// stack-copied after `init` (see `std.Thread.Pool.init`).
+    pub fn init(self: *VerifyWorkerPool, allocator: Allocator, n_jobs: usize, out: *verify_queue_mod.VerifyQueue) !void {
+        self.* = .{
             .allocator = allocator,
-            .pool = pool,
+            .pool = undefined,
             .out = out,
         };
+        try self.pool.init(.{ .allocator = allocator, .n_jobs = @as(?usize, n_jobs) });
     }
 
     pub fn deinit(self: *VerifyWorkerPool) void {
@@ -84,7 +85,8 @@ test "verify worker pool inline pushes verdicts" {
     defer q.deinit(gpa);
 
     // No pool threads: testing allocator is single-threaded only. `verifyInline` still runs `runOne`.
-    var pool = try VerifyWorkerPool.init(gpa, 0, &q);
+    var pool: VerifyWorkerPool = undefined;
+    try pool.init(gpa, 0, &q);
     defer pool.deinit();
 
     var good: [32]u8 = undefined;
