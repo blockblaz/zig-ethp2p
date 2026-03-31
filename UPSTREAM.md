@@ -24,6 +24,10 @@ When updating:
 2. Run `zig build test` (golden bytes must still match `google.golang.org/protobuf` output from that tree).
 3. Bump the commit hash in this file.
 
+## EC schemes (issue [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14))
+
+`src/layer/ec_scheme.zig` defines `EcSchemeKind` and the `"reed-solomon"` string aligned with `broadcast/rs/types.go` `NewScheme`. Only Reed–Solomon is implemented end-to-end; RLNC needs spec’d preamble / chunk types and a strategy implementation before wire changes.
+
 ## Abstract mesh tests
 
 `src/sim/rs_mesh.zig` runs the same RS **settings and graph topologies** as `sim/scenario_test.go` (`TestNetwork` RS / RS-ChunkLen) against `layer.RsStrategy` in-process (no libp2p, no Go simnet). Adjacency and per-peer stats are **heap-allocated** (`MaxMeshNodes` cap). `MeshParams.partition` drops selected undirected links for an initial round range (no chunks / routing across them), then restores them—this matches the **intent** of ethp2p CI’s `TestNodeReconnection` name in the `simnet-rs` job (that test does not exist on ethp2p `main` today). `zig build test` and `zig build simtest` both execute these cases. With `ZIG_ETHP2P_STRESS=1` (see `zig build test-stress`), extra cases use higher round budgets and add **8- and 16-node** ring graphs beyond the Go file’s largest fixed topology.
