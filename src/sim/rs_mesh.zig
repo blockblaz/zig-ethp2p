@@ -1,6 +1,7 @@
 //! Abstract RS mesh (“simnet-style”) exercises `layer.RsStrategy` with the same RS settings and
 //! topologies as ethp2p `sim/scenario_test.go` `TestNetwork`, without libp2p or Go simnet.
 //!
+//! Graph structure and `PeerSessionStats` matrices are heap-backed (`MaxMeshNodes` upper bound).
 //! This validates zig-ethp2p’s strategy layer under multi-hop chunk forwarding; it is not a UDP
 //! timing simulation.
 
@@ -40,25 +41,49 @@ const MeshNode = struct {
     strat: RsStrategy = undefined,
 };
 
+/// Upper bound on `MeshParams.node_count` for abstract mesh sims (heap use is O(n²) for stats + edges).
+pub const MaxMeshNodes = 256;
+
 /// Run abstract RS broadcast until every non-origin node decodes `params.payload`, or `max_rounds`.
 pub fn runAbstractRsMesh(gpa: Allocator, params: MeshParams) !void {
     const n = params.node_count;
     std.debug.assert(n >= 2);
-    std.debug.assert(n <= MaxNodes);
+    if (n > MaxMeshNodes) return error.MeshTooLarge;
 
     var nodes = try gpa.alloc(MeshNode, n);
     defer gpa.free(nodes);
 
-    var deg: [MaxNodes]u8 = .{0} ** MaxNodes;
-    var neigh: [MaxNodes][MaxNodes]u8 = .{.{0} ** MaxNodes} ** MaxNodes;
+    var deg = try gpa.alloc(usize, n);
+    defer gpa.free(deg);
+    @memset(deg, 0);
 
     for (params.edges) |e| {
         std.debug.assert(e.a < n and e.b < n and e.a != e.b);
-        neigh[e.a][deg[e.a]] = @intCast(e.b);
         deg[e.a] += 1;
-        neigh[e.b][deg[e.b]] = @intCast(e.a);
         deg[e.b] += 1;
     }
+
+    var neigh = try gpa.alloc([]usize, n);
+    defer {
+        for (neigh) |row| gpa.free(row);
+        gpa.free(neigh);
+    }
+    for (0..n) |i| {
+        neigh[i] = try gpa.alloc(usize, deg[i]);
+    }
+
+    var cursor = try gpa.alloc(usize, n);
+    defer gpa.free(cursor);
+    @memset(cursor, 0);
+    @memset(deg, 0);
+
+    for (params.edges) |e| {
+        neigh[e.a][cursor[e.a]] = e.b;
+        cursor[e.a] += 1;
+        neigh[e.b][cursor[e.b]] = e.a;
+        cursor[e.b] += 1;
+    }
+    for (0..n) |i| deg[i] = neigh[i].len;
 
     for (nodes, 0..) |*node, i| {
         node.id = nodeId(&node.id_buf, i);
@@ -79,13 +104,18 @@ pub fn runAbstractRsMesh(gpa: Allocator, params: MeshParams) !void {
         nodes[built].strat = try RsStrategy.newRelay(gpa, params.cfg, &nodes[0].strat.preamble);
     }
 
-    var stats: [MaxNodes][MaxNodes]broadcast_types.PeerSessionStats = undefined;
-    for (&stats) |*row| {
-        for (row) |*cell| cell.* = .{ .peer_id = &.{} };
+    var stats = try gpa.alloc([]broadcast_types.PeerSessionStats, n);
+    defer {
+        for (stats) |row| gpa.free(row);
+        gpa.free(stats);
+    }
+    for (0..n) |i| {
+        stats[i] = try gpa.alloc(broadcast_types.PeerSessionStats, n);
+        for (stats[i]) |*cell| cell.* = .{ .peer_id = &.{} };
     }
 
     for (nodes, 0..) |*dst, di| {
-        var k: u8 = 0;
+        var k: usize = 0;
         while (k < deg[di]) : (k += 1) {
             const j = neigh[di][k];
             try dst.strat.attachPeer(nodes[j].id, &stats[di][j]);
@@ -114,7 +144,7 @@ pub fn runAbstractRsMesh(gpa: Allocator, params: MeshParams) !void {
             }
         }
 
-        try exchangeRouting(gpa, nodes[0..n], neigh, deg);
+        try exchangeRouting(gpa, nodes[0..n], neigh[0..n], deg[0..n]);
 
         var all = true;
         for (1..n) |j| {
@@ -137,20 +167,19 @@ pub fn runAbstractRsMesh(gpa: Allocator, params: MeshParams) !void {
     }
 }
 
-const MaxNodes = 8;
-
 fn exchangeRouting(
     gpa: Allocator,
     nodes: []MeshNode,
-    neigh: [MaxNodes][MaxNodes]u8,
-    deg: [MaxNodes]u8,
+    neigh: []const []const usize,
+    deg: []const usize,
 ) !void {
+    std.debug.assert(neigh.len == nodes.len and deg.len == nodes.len);
     for (nodes, 0..) |*src, si| {
         const pr = try src.strat.pollRouting(gpa, false);
         if (!pr.emit) continue;
         const bm = pr.bitmap orelse continue;
         defer bm.deinit(gpa);
-        var k: u8 = 0;
+        var k: usize = 0;
         while (k < deg[si]) : (k += 1) {
             const j = neigh[si][k];
             const cancels = try nodes[j].strat.routingUpdate(src.id, bm);
@@ -320,5 +349,36 @@ test "abstract RS mesh eight nodes ring env stress (large-network scale)" {
         .cfg = rsCfgDefault(),
         .payload = &payload,
         .max_rounds = 8_000_000,
+    });
+}
+
+fn ringEdges(comptime node_count: usize) [node_count]Edge {
+    var out: [node_count]Edge = undefined;
+    for (0..node_count) |i| {
+        out[i] = .{ .a = i, .b = (i + 1) % node_count };
+    }
+    return out;
+}
+
+// Heap-backed mesh supports rings beyond the old fixed `MaxNodes`; stress-only.
+test "abstract RS mesh sixteen nodes ring env stress" {
+    const builtin = @import("builtin");
+    if (builtin.os.tag == .windows) return;
+
+    const gpa = std.testing.allocator;
+    const env = std.process.getEnvVarOwned(gpa, "ZIG_ETHP2P_STRESS") catch return;
+    defer gpa.free(env);
+    if (!std.mem.eql(u8, env, "1")) return;
+
+    const edges = comptime ringEdges(16);
+    var payload: [10 * 1024]u8 = undefined;
+    fillPayload(&payload);
+
+    try runAbstractRsMesh(gpa, .{
+        .node_count = 16,
+        .edges = &edges,
+        .cfg = rsCfgDefault(),
+        .payload = &payload,
+        .max_rounds = 25_000_000,
     });
 }
