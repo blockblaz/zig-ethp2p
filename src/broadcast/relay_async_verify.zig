@@ -1,5 +1,7 @@
 //! Async SHA256 verify via `VerifyWorkerPool`, then single-threaded `drainCompleted` → `relayIngestChunk`.
 //! Callers must use a **thread-safe** `pool_alloc` when `n_jobs > 0` (e.g. `std.heap.page_allocator`).
+//! After `init` with `n_jobs > 0`, do not move or copy `RelayAsyncVerifier`: `std.Thread.Pool` workers
+//! pin `&self.pool.pool` to the address used during `init`.
 
 const std = @import("std");
 const broadcast_types = @import("../layer/broadcast_types.zig");
@@ -40,14 +42,16 @@ pub const RelayAsyncVerifier = struct {
     };
 
     /// `pool_alloc` must be thread-safe if `n_jobs > 0`. `allocator` is for pending metadata and `out_q` (main thread).
+    /// Initializes `self` in place so embedded `std.Thread.Pool` is not copied after worker threads start.
     pub fn init(
+        self: *RelayAsyncVerifier,
         allocator: Allocator,
         pool_alloc: Allocator,
         n_jobs: usize,
         channel: *ChannelRs,
         registry: ?*dedup_registry_mod.DedupRegistry,
-    ) Error!RelayAsyncVerifier {
-        var self: RelayAsyncVerifier = .{
+    ) Error!void {
+        self.* = .{
             .allocator = allocator,
             .channel = channel,
             .registry = registry,
@@ -55,7 +59,6 @@ pub const RelayAsyncVerifier = struct {
             .pool = undefined,
         };
         try self.pool.init(pool_alloc, n_jobs, &self.out_q);
-        return self;
     }
 
     pub fn deinit(self: *RelayAsyncVerifier) void {
@@ -250,7 +253,8 @@ test "relay async verify submitAwaitApply ingests chunk" {
 
     try ch.attachRelaySession("m1", &origin.preamble);
 
-    var verifier = try RelayAsyncVerifier.init(gpa, std.heap.page_allocator, 1, ch, null);
+    var verifier: RelayAsyncVerifier = undefined;
+    try RelayAsyncVerifier.init(&verifier, gpa, std.heap.page_allocator, 1, ch, null);
     defer verifier.deinit();
 
     const c0 = origin.chunks[0];
@@ -283,7 +287,8 @@ test "relay async verify invalid chunk does not ingest" {
 
     try ch.attachRelaySession("m1", &origin.preamble);
 
-    var verifier = try RelayAsyncVerifier.init(gpa, std.heap.page_allocator, 1, ch, null);
+    var verifier: RelayAsyncVerifier = undefined;
+    try RelayAsyncVerifier.init(&verifier, gpa, std.heap.page_allocator, 1, ch, null);
     defer verifier.deinit();
 
     var bad = try gpa.dupe(u8, origin.chunks[0]);
