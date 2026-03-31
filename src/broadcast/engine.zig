@@ -2,12 +2,15 @@
 
 const std = @import("std");
 const ChannelRs = @import("channel_rs.zig").ChannelRs;
+const dedup_registry_mod = @import("../layer/dedup_registry.zig");
 const observer_mod = @import("observer.zig");
 
 const Allocator = std.mem.Allocator;
 
 pub const EngineConfig = struct {
     observer: observer_mod.Observer = .{},
+    /// When set, `Engine` owns a `DedupRegistry` for `relayIngestChunk`-style helpers.
+    enable_cross_session_dedup: bool = false,
 };
 
 pub const Engine = struct {
@@ -15,13 +18,19 @@ pub const Engine = struct {
     local_peer_id: []u8,
     config: EngineConfig,
     channels: std.StringHashMapUnmanaged(*ChannelRs),
+    dedup_registry: ?dedup_registry_mod.DedupRegistry = null,
 
     pub fn init(allocator: Allocator, local_peer_id: []const u8, config: EngineConfig) !Engine {
+        var dedup_registry: ?dedup_registry_mod.DedupRegistry = null;
+        if (config.enable_cross_session_dedup) {
+            dedup_registry = dedup_registry_mod.DedupRegistry{};
+        }
         return .{
             .allocator = allocator,
             .local_peer_id = try allocator.dupe(u8, local_peer_id),
             .config = config,
             .channels = .{},
+            .dedup_registry = dedup_registry,
         };
     }
 
@@ -33,7 +42,15 @@ pub const Engine = struct {
             self.allocator.destroy(ch);
         }
         self.channels.deinit(self.allocator);
+        if (self.dedup_registry) |*d| {
+            d.deinit(self.allocator);
+        }
         self.allocator.free(self.local_peer_id);
+    }
+
+    pub fn dedupRegistryPtr(self: *Engine) ?*dedup_registry_mod.DedupRegistry {
+        if (self.dedup_registry) |*d| return d;
+        return null;
     }
 
     pub fn attachChannelRs(

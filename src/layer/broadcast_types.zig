@@ -13,6 +13,11 @@ pub const Verdict = enum(u8) {
     pending = 5,
 };
 
+pub const ChunkIngestResult = struct {
+    verdict: Verdict,
+    complete: bool,
+};
+
 /// Session passes this into `RsStrategy.takeChunk` so the strategy can cancel the dedup group.
 /// Nil-safe: `cancel(null)` is a no-op.
 pub const DedupCancel = struct {
