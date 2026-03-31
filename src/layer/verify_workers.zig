@@ -1,4 +1,7 @@
 //! Background SHA256 chunk checks feeding `VerifyQueue` (Go-style async verify workers).
+//!
+//! When `n_jobs > 0`, the pool uses `allocator` from worker threads — use a thread-safe
+//! allocator (for example `page_allocator` or a locked GPA), not `std.testing.allocator`.
 
 const std = @import("std");
 const broadcast_types = @import("broadcast_types.zig");
@@ -20,7 +23,7 @@ pub const VerifyWorkerPool = struct {
 
     pub fn init(allocator: Allocator, n_jobs: usize, out: *verify_queue_mod.VerifyQueue) !VerifyWorkerPool {
         var pool: std.Thread.Pool = undefined;
-        try pool.init(.{ .allocator = allocator, .n_jobs = n_jobs });
+        try pool.init(.{ .allocator = allocator, .n_jobs = @as(?usize, n_jobs) });
         return .{
             .allocator = allocator,
             .pool = pool,
@@ -81,7 +84,8 @@ test "verify worker pool inline pushes verdicts" {
     var q: verify_queue_mod.VerifyQueue = .{};
     defer q.deinit(gpa);
 
-    var pool = try VerifyWorkerPool.init(gpa, 2, &q);
+    // No pool threads: testing allocator is single-threaded only. `verifyInline` still runs `runOne`.
+    var pool = try VerifyWorkerPool.init(gpa, 0, &q);
     defer pool.deinit();
 
     var good: [32]u8 = undefined;
