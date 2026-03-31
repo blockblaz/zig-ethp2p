@@ -49,10 +49,9 @@ pub const VerifyWorkerPool = struct {
         self.pool.spawnWg(wg, runOne, .{ self, job.handle, job.expected_hash, owned });
     }
 
-    /// Synchronous path (no pool thread): hash, push, free copy.
+    /// Synchronous path (no pool thread): hash, push. `runOne` frees the dupe.
     pub fn verifyInline(self: *VerifyWorkerPool, job: VerifyJob) Allocator.Error!void {
         const owned = try self.allocator.dupe(u8, job.data);
-        defer self.allocator.free(owned);
         runOne(self, job.handle, job.expected_hash, owned);
     }
 };
