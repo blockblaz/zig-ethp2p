@@ -19,7 +19,8 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | Engine-wide dedup registry (`channel` + `message` + chunk index) | multi-peer ingest dedup | `layer.dedup_registry`, `Engine.enable_cross_session_dedup` |
 | Verify result FIFO (single-threaded `Verified()` shim) | async verify channels | `layer.verify_queue` |
 | Verify worker pool (SHA256 vs preamble hash → queue) | background verify workers | `layer.verify_workers` |
-| Relay session attach + `relayIngestChunk` | relay ingest path | `broadcast.channel_rs` |
+| Relay session attach + `relayIngestChunk` / `relayIngestChunkVerified` | relay ingest path | `broadcast.channel_rs` |
+| Async SHA256 verify → `relayIngestChunk` (driver polls `drainCompleted`) | Go `Verified()` → `handleVerifyResult` | `broadcast.relay_async_verify`, `layer.verify_workers` |
 | RS routing bitmap | [`broadcast/rs/bitmap.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/bitmap.go) | `layer.bitmap` |
 | RS `Config` / `initPreamble` | [`broadcast/rs/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/types.go) | `layer.rs_init` |
 | RS emit planner (fair dispatch heap) | [`broadcast/rs/emit.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/emit.go) | `layer.emit_planner` |
@@ -33,21 +34,24 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | Gossipsim cross-checks (golden envelope, mesh fanout, `broadcast.gossip` vs transport) | — | `sim.gossipsub_interop` |
 | Gossipsub `ControlIHave` / `ControlIWant` protobuf bodies (subset of [libp2p `rpc.proto`](https://github.com/libp2p/go-libp2p-pubsub/blob/master/pb/rpc.proto)) | `ControlMessage` nested fields | `sim.gossipsub_rpc_pb`, `proto/gossipsub_rpc.proto` |
 | Gossipsub top-level `RPC` with `control` only (field 3) | length-delimited `RPC` shell for stream payloads | `sim.gossipsub_rpc_pb` (`encodeRpcEnvelopeControl`, `decodeRpcControlOnly`) |
-| **Still open** (see [issues](#pending-work)) | Full `RPC` (subs/publish, graft/prune, …), libp2p/simnet host, RLNC, larger RS graphs, production ingest wiring | — |
+| **Still open** (see [issues](#pending-work)) | Full gossipsub `RPC`, libp2p/simnet host, RLNC, larger RS mesh graphs, optional channel-style event loop / `VerdictPending` for non-RS schemes | — |
 
 ## Pending work
 
-**On `main` today:** wire + layer RS strategy; `layer.dedup` / `layer.dedup_registry` / `layer.verify_queue` / `layer.verify_workers`; `broadcast.*` (engine, channel, relay helpers); abstract RS mesh (2-, 4-, 6-node; optional **stress** adds six-node budget and **eight-node ring**); gossipsim stack; gossipsub `ControlIHave` / `ControlIWant` plus **`RPC` control-only envelope** helpers in `sim.gossipsub_rpc_pb`. Default `zig build test` stays fast.
+**On `main` today:** wire + layer RS strategy; `layer.dedup` / `layer.dedup_registry` / `layer.verify_queue` / `layer.verify_workers`; `broadcast.*` (engine, channel, `relay_async_verify`, verified + unverified relay ingest); abstract RS mesh (2-, 4-, 6-node; optional **stress** adds six-node budget and **eight-node ring**); gossipsim stack; gossipsub `ControlIHave` / `ControlIWant` plus **`RPC` control-only envelope** helpers in `sim.gossipsub_rpc_pb`. CI enforces `build.zig.zon` `minimum_zig_version` vs workflow `ZIG_VERSION`; `just check-zig-ci-align` matches locally. Default `zig build test` stays fast.
+
+**Suggested next:** [#13](https://github.com/ch4r10t33r/zig-ethp2p/issues/13) — extend `sim/rs_mesh.zig` with larger topologies and budgets aligned with Go `sim/scenario_test.go` (builds on existing mesh tests without new transport).
 
 **Tracked issues** (roadmap, not exhaustive):
 
-| Issue | Topic |
-|-------|--------|
-| [#11](https://github.com/ch4r10t33r/zig-ethp2p/issues/11) | Wire dedup registry + verify pool into Go-parity session ingest |
-| [#12](https://github.com/ch4r10t33r/zig-ethp2p/issues/12) | Full gossipsub `RPC`, libp2p streams, simnet/QUIC-style host |
-| [#13](https://github.com/ch4r10t33r/zig-ethp2p/issues/13) | RS abstract mesh: larger graphs & Go scalability alignment |
-| [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) | RLNC and additional EC `Scheme` types |
-| [#15](https://github.com/ch4r10t33r/zig-ethp2p/issues/15) | `UPSTREAM.md` / proto pins / CI Zig version alignment |
+| Issue | Status / topic |
+|-------|----------------|
+| [#11](https://github.com/ch4r10t33r/zig-ethp2p/issues/11) | Open — dedup + verify pool + ingest; async `RelayAsyncVerifier` on `main`; engine-bound helpers (`*Engine` ingest, decode clears dedup) may land via open PR — close or narrow when merged |
+| [#12](https://github.com/ch4r10t33r/zig-ethp2p/issues/12) | Open — full gossipsub `RPC`, libp2p streams, simnet/QUIC-style host |
+| [#13](https://github.com/ch4r10t33r/zig-ethp2p/issues/13) | Open — RS abstract mesh: larger graphs & Go scalability alignment (**next up**) |
+| [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) | Open — RLNC and additional EC `Scheme` types |
+| [#15](https://github.com/ch4r10t33r/zig-ethp2p/issues/15) | **Closed** — `UPSTREAM.md` Zig toolchain note, CI `minimum_zig_version` check, `just check-zig-ci-align` |
+
 ## Requirements
 
 - Zig **0.15.0** or newer (tested with **0.15.1**).
