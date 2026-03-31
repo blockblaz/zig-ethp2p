@@ -10,6 +10,7 @@ pub const layer = struct {
     pub const emit_planner = @import("layer/emit_planner.zig");
     pub const rs_encode = @import("layer/rs_encode.zig");
     pub const rs_init = @import("layer/rs_init.zig");
+    pub const rs_strategy = @import("layer/rs_strategy.zig");
 };
 
 test {
