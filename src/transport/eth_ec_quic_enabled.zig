@@ -22,6 +22,20 @@ fn acceptIncomingQuicStream(
     return error.QuicAcceptStreamTimeout;
 }
 
+fn acceptIncomingQuicUniStream(
+    conn: *quic.QuicConnection,
+    local: *quic.QuicEndpoint,
+    peer: *quic.QuicEndpoint,
+) anyerror!*quic.QuicStream {
+    var budget: u32 = 10_000;
+    while (budget > 0) : (budget -= 1) {
+        if (quic.tryAcceptIncomingUniStream(conn)) |st| return st;
+        try quic.poll(local, 0);
+        try quic.poll(peer, 0);
+    }
+    return error.QuicAcceptUniStreamTimeout;
+}
+
 fn waitQuicStreamBytes(
     st: *quic.QuicStream,
     local: *quic.QuicEndpoint,
@@ -190,7 +204,12 @@ test "QUIC listen + dial, TLS handshake, ALPN eth-ec-broadcast" {
     quic.destroy(client_ep, conn);
 }
 
-test "QUIC streams: BCAST handshake then SESS session_open (wire framing)" {
+// Matches the symmetric BCAST handshake in peer.go:
+//   Both sides concurrently call OpenUniStream() and write PROTOCOL_BCAST + Handshake.
+//   Both sides concurrently call AcceptUniStream() to receive the peer's stream.
+// In Zig's poll-driven model we do this sequentially but interleave both sides before
+// any reads so neither blocks waiting for the other.
+test "QUIC UNI streams: symmetric BCAST handshake + SESS session_open (wire framing)" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     if (@import("builtin").os.tag == .wasi) return error.SkipZigTest;
 
@@ -242,38 +261,62 @@ test "QUIC streams: BCAST handshake then SESS session_open (wire framing)" {
     while (rounds < 30_000) : (rounds += 1) {
         try quic.poll(srv, 0);
         try quic.poll(client_ep, 0);
-        if (server_conn == null) {
-            server_conn = quic.tryAccept(srv);
-        }
+        if (server_conn == null) server_conn = quic.tryAccept(srv);
         if (quic.handshakeComplete(conn)) {
             if (server_conn) |sc| {
                 if (quic.handshakeComplete(sc)) break;
             }
         }
     }
-
     const sc = server_conn orelse return error.MissingServerConnection;
     try std.testing.expect(quic.handshakeComplete(conn));
     try std.testing.expect(quic.handshakeComplete(sc));
 
-    const cli_bcast = try quic.streamMake(conn, srv);
-    var bcast_payload = std.ArrayList(u8).empty;
-    defer bcast_payload.deinit(alloc);
+    // --- BCAST symmetric handshake (UNI streams) ---
+    // Both sides open their outbound BCAST UNI stream before either reads,
+    // matching peer.go's concurrent goroutine pattern.
+
+    const cli_bcast_out = try quic.streamMakeUni(conn, srv);
+    const srv_bcast_out = try quic.streamMakeUni(sc, client_ep);
+
+    var cli_bcast_payload = std.ArrayList(u8).empty;
+    defer cli_bcast_payload.deinit(alloc);
     {
-        const w = bcast_payload.writer(alloc);
+        const w = cli_bcast_payload.writer(alloc);
         try bcast_stream.writeBcastHandshakeOpen(w, alloc, .{
             .version = 1,
             .channels = &.{ "blocks", "atts" },
-            .peer_id = "peer1",
+            .peer_id = "client-peer",
         });
     }
-    try quic.streamQueueWrite(cli_bcast, bcast_payload.items);
-    try quic.streamDrainWrites(cli_bcast, srv, 10_000);
+    try quic.streamQueueWrite(cli_bcast_out, cli_bcast_payload.items);
+    try quic.streamDrainWrites(cli_bcast_out, srv, 10_000);
 
-    const srv_bcast = try acceptIncomingQuicStream(sc, srv, client_ep);
-    try waitQuicStreamBytes(srv_bcast, srv, client_ep, bcast_payload.items.len, 10_000);
-    try std.testing.expectEqualSlices(u8, bcast_payload.items, quic.streamReadSlice(srv_bcast));
-    const bcast_copy = try alloc.dupe(u8, quic.streamReadSlice(srv_bcast));
+    var srv_bcast_payload = std.ArrayList(u8).empty;
+    defer srv_bcast_payload.deinit(alloc);
+    {
+        const w = srv_bcast_payload.writer(alloc);
+        try bcast_stream.writeBcastHandshakeOpen(w, alloc, .{
+            .version = 1,
+            .channels = &.{"chunks"},
+            .peer_id = "server-peer",
+        });
+    }
+    try quic.streamQueueWrite(srv_bcast_out, srv_bcast_payload.items);
+    try quic.streamDrainWrites(srv_bcast_out, client_ep, 10_000);
+
+    // Accept the peer's inbound BCAST UNI stream on each side.
+    const srv_bcast_in = try acceptIncomingQuicUniStream(sc, srv, client_ep);
+    const cli_bcast_in = try acceptIncomingQuicUniStream(conn, client_ep, srv);
+
+    try waitQuicStreamBytes(srv_bcast_in, srv, client_ep, cli_bcast_payload.items.len, 10_000);
+    try waitQuicStreamBytes(cli_bcast_in, client_ep, srv, srv_bcast_payload.items.len, 10_000);
+
+    try std.testing.expectEqualSlices(u8, cli_bcast_payload.items, quic.streamReadSlice(srv_bcast_in));
+    try std.testing.expectEqualSlices(u8, srv_bcast_payload.items, quic.streamReadSlice(cli_bcast_in));
+
+    // Decode the client's BCAST handshake as seen by the server.
+    const bcast_copy = try alloc.dupe(u8, quic.streamReadSlice(srv_bcast_in));
     defer alloc.free(bcast_copy);
     var bcast_fbs = std.io.fixedBufferStream(bcast_copy);
     var hs_owned = try bcast_stream.readBcastPeerHandshake(alloc, bcast_fbs.reader());
@@ -281,12 +324,14 @@ test "QUIC streams: BCAST handshake then SESS session_open (wire framing)" {
     switch (hs_owned) {
         .peer_handshake => |h| {
             try std.testing.expectEqual(@as(u32, 1), h.version);
-            try std.testing.expectEqualStrings("peer1", h.peer_id);
+            try std.testing.expectEqualStrings("client-peer", h.peer_id);
         },
         else => unreachable,
     }
 
-    const cli_sess = try quic.streamMake(conn, srv);
+    // --- SESS UNI stream (peer_ctrl.go handleSessionOpen) ---
+    // Client opens a SESS UNI stream and writes session_open.
+    const cli_sess = try quic.streamMakeUni(conn, srv);
     var sess_payload = std.ArrayList(u8).empty;
     defer sess_payload.deinit(alloc);
     {
@@ -301,9 +346,12 @@ test "QUIC streams: BCAST handshake then SESS session_open (wire framing)" {
     try quic.streamQueueWrite(cli_sess, sess_payload.items);
     try quic.streamDrainWrites(cli_sess, srv, 10_000);
 
-    const srv_sess = try acceptIncomingQuicStream(sc, srv, client_ep);
+    // Server accepts the SESS UNI stream (peer_in.go runAcceptLoop).
+    const srv_sess = try acceptIncomingQuicUniStream(sc, srv, client_ep);
     try waitQuicStreamBytes(srv_sess, srv, client_ep, sess_payload.items.len, 10_000);
     try std.testing.expectEqualSlices(u8, sess_payload.items, quic.streamReadSlice(srv_sess));
+
+    // Decode SESS session_open frame.
     const sess_copy = try alloc.dupe(u8, quic.streamReadSlice(srv_sess));
     defer alloc.free(sess_copy);
     var sess_fbs = std.io.fixedBufferStream(sess_copy);

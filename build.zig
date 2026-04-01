@@ -32,6 +32,8 @@ fn addLsquicQuicModule(
     });
     quic_mod.addIncludePath(lsquic_upstream.path("include"));
     quic_mod.addIncludePath(openssl_src.path("include"));
+    // zig-ethp2p extension header (lsquic_ethp2p_ext.h) lives alongside the vendor build.zig.
+    quic_mod.addIncludePath(b.path("vendor/lsquic_zig"));
 
     return .{
         .quic_mod = quic_mod,
