@@ -7,6 +7,7 @@ const posix = std.posix;
 const lsquic = @cImport({
     @cInclude("lsquic.h");
     @cInclude("lsquic_types.h");
+    @cInclude("lsquic_ethp2p_ext.h");
 });
 
 const ossl = @cImport({
@@ -221,6 +222,11 @@ pub const QuicConnection = struct {
         read_buf: std.ArrayListUnmanaged(u8),
         write_buf: std.ArrayListUnmanaged(u8),
         write_off: usize,
+        /// Set by `on_reset` when the peer resets this stream.
+        /// `how`: 0 = read side reset (RESET_STREAM received),
+        ///        1 = write side reset (STOP_SENDING received),
+        ///        2 = both.
+        reset_how: ?i32 = null,
 
         pub fn deinit(self: *Stream) void {
             const a = self.conn.ep.allocator.*;
@@ -232,10 +238,15 @@ pub const QuicConnection = struct {
     raw: *lsquic.lsquic_conn_t,
     ep: *QuicEndpoint,
     hsk_ok: bool,
+    /// Incoming peer-initiated bidirectional streams waiting to be accepted.
     incoming_streams: std.ArrayListUnmanaged(*Stream),
+    /// Incoming peer-initiated unidirectional streams waiting to be accepted.
+    incoming_uni_streams: std.ArrayListUnmanaged(*Stream),
     streams_owned: std.ArrayListUnmanaged(*Stream),
-    /// Client/server: `streamMake` leaves a `Stream` here until `on_new_stream` binds `raw`.
+    /// `streamMake` leaves a bidi `Stream` here until `on_new_stream` binds `raw`.
     stream_outgoing_ready: ?*Stream,
+    /// `streamMakeUni` leaves a uni `Stream` here until `on_new_stream` binds `raw`.
+    stream_outgoing_uni_ready: ?*Stream,
 
     fn freeAllStreams(self: *QuicConnection) void {
         const a = self.ep.allocator.*;
@@ -244,7 +255,13 @@ pub const QuicConnection = struct {
             a.destroy(p);
             self.stream_outgoing_ready = null;
         }
+        if (self.stream_outgoing_uni_ready) |p| {
+            p.deinit();
+            a.destroy(p);
+            self.stream_outgoing_uni_ready = null;
+        }
         self.incoming_streams.clearAndFree(a);
+        self.incoming_uni_streams.clearAndFree(a);
         for (self.streams_owned.items) |st| {
             st.deinit();
             a.destroy(st);
@@ -265,6 +282,14 @@ pub const QuicConnection = struct {
         while (i < self.incoming_streams.items.len) {
             if (self.incoming_streams.items[i] == st) {
                 _ = self.incoming_streams.swapRemove(i);
+                break;
+            }
+            i += 1;
+        }
+        i = 0;
+        while (i < self.incoming_uni_streams.items.len) {
+            if (self.incoming_uni_streams.items[i] == st) {
+                _ = self.incoming_uni_streams.swapRemove(i);
                 break;
             }
             i += 1;
@@ -416,8 +441,10 @@ fn onNewConn(stream_if_ctx: ?*anyopaque, c: ?*lsquic.lsquic_conn_t) callconv(.c)
         .ep = ep,
         .hsk_ok = false,
         .incoming_streams = .{},
+        .incoming_uni_streams = .{},
         .streams_owned = .{},
         .stream_outgoing_ready = null,
+        .stream_outgoing_uni_ready = null,
     };
     lsquic.lsquic_conn_set_ctx(c, @ptrCast(qc));
     if (ep.is_server) {
@@ -449,6 +476,50 @@ fn onNewStream(stream_if_ctx: ?*anyopaque, s: ?*lsquic.lsquic_stream_t) callconv
     const raw_conn = lsquic.lsquic_stream_conn(s.?);
     const qc: *QuicConnection = @ptrCast(@alignCast(lsquic.lsquic_conn_get_ctx(raw_conn) orelse return null));
 
+    // QUIC stream ID encoding (RFC 9000 §2.1):
+    //   bit 0: 0 = initiator is client, 1 = initiator is server
+    //   bit 1: 0 = bidirectional, 1 = unidirectional
+    const sid = lsquic.lsquic_stream_id(s.?);
+    const is_uni = (sid & 0x2) != 0;
+
+    if (is_uni) {
+        // Unidirectional stream: check if it is our outgoing stream.
+        if (qc.stream_outgoing_uni_ready) |tgt| {
+            tgt.raw = s.?;
+            lsquic.lsquic_stream_set_ctx(s.?, @ptrCast(tgt));
+            qc.stream_outgoing_uni_ready = null;
+            qc.streams_owned.append(alloc, tgt) catch {
+                _ = lsquic.lsquic_stream_close(s.?);
+                return null;
+            };
+            // Outgoing UNI streams are write-only; do not request reads.
+            _ = lsquic.lsquic_stream_wantwrite(s.?, 0);
+            return @ptrCast(tgt);
+        }
+        // Incoming UNI stream from peer.
+        const inc = alloc.create(QuicStream) catch return null;
+        inc.* = .{
+            .raw = s.?,
+            .conn = qc,
+            .read_buf = .{},
+            .write_buf = .{},
+            .write_off = 0,
+        };
+        lsquic.lsquic_stream_set_ctx(s.?, @ptrCast(inc));
+        qc.streams_owned.append(alloc, inc) catch {
+            alloc.destroy(inc);
+            return null;
+        };
+        qc.incoming_uni_streams.append(alloc, inc) catch {
+            _ = qc.streams_owned.pop();
+            alloc.destroy(inc);
+            return null;
+        };
+        _ = lsquic.lsquic_stream_wantread(s.?, 1);
+        return @ptrCast(inc);
+    }
+
+    // Bidirectional stream: check if it is our outgoing stream.
     if (qc.stream_outgoing_ready) |tgt| {
         tgt.raw = s.?;
         lsquic.lsquic_stream_set_ctx(s.?, @ptrCast(tgt));
@@ -462,6 +533,7 @@ fn onNewStream(stream_if_ctx: ?*anyopaque, s: ?*lsquic.lsquic_stream_t) callconv
         return @ptrCast(tgt);
     }
 
+    // Incoming bidirectional stream from peer.
     const inc = alloc.create(QuicStream) catch return null;
     inc.* = .{
         .raw = s.?,
@@ -538,6 +610,14 @@ fn onStreamClose(s: ?*lsquic.lsquic_stream_t, h: ?*lsquic.lsquic_stream_ctx_t) c
     st.conn.ep.allocator.destroy(st);
 }
 
+fn onStreamReset(s: ?*lsquic.lsquic_stream_t, h: ?*lsquic.lsquic_stream_ctx_t, how: c_int) callconv(.c) void {
+    _ = s;
+    if (h == null) return;
+    const st: *QuicStream = @ptrCast(@alignCast(h.?));
+    // Record which direction was reset: 0=read, 1=write, 2=both.
+    st.reset_how = how;
+}
+
 fn onHskDone(c: ?*lsquic.lsquic_conn_t, status: lsquic.enum_lsquic_hsk_status) callconv(.c) void {
     if (status != lsquic.LSQ_HSK_OK and status != lsquic.LSQ_HSK_RESUMED_OK) return;
     const qc: *QuicConnection = @ptrCast(@alignCast(lsquic.lsquic_conn_get_ctx(c.?)));
@@ -557,7 +637,7 @@ const stream_if: lsquic.lsquic_stream_if = .{
     .on_hsk_done = onHskDone,
     .on_new_token = null,
     .on_sess_resume_info = null,
-    .on_reset = null,
+    .on_reset = onStreamReset,
     .on_conncloseframe_received = null,
 };
 
@@ -781,6 +861,13 @@ pub fn tryAcceptIncomingStream(conn: *QuicConnection) ?*QuicStream {
     return conn.incoming_streams.swapRemove(0);
 }
 
+/// Pop the next peer-initiated unidirectional stream, if any.
+/// These are the streams used by the ethp2p reference for BCAST, SESS, and CHUNK.
+pub fn tryAcceptIncomingUniStream(conn: *QuicConnection) ?*QuicStream {
+    if (conn.incoming_uni_streams.items.len == 0) return null;
+    return conn.incoming_uni_streams.swapRemove(0);
+}
+
 /// Open a locally initiated bidirectional stream (calls `lsquic_conn_make_stream`). Requires a
 /// completed handshake. Drives `poll` on this connection until the stream exists or a bound is hit.
 /// When `poll_peer` is non-null, it is polled each iteration as well (needed on loopback so both
@@ -812,6 +899,58 @@ pub fn streamMake(conn: *QuicConnection, poll_peer: ?*QuicEndpoint) !*QuicStream
         return error.StreamCreateFailed;
     }
     return qs;
+}
+
+/// Open a locally initiated unidirectional stream (calls `lsquic_conn_make_uni_stream`). Requires
+/// a completed handshake. The ethp2p reference uses UNI streams for BCAST control, SESS session
+/// open/routing, and CHUNK data (`peer.go`, `peer_ctrl.go`, `peer_in.go`).
+///
+/// `on_new_stream` fires synchronously inside `lsquic_conn_make_uni_stream`; the polling loop is a
+/// safety fallback in case lsquic defers the callback in some edge case.
+pub fn streamMakeUni(conn: *QuicConnection, poll_peer: ?*QuicEndpoint) !*QuicStream {
+    if (conn.stream_outgoing_uni_ready != null) return error.StreamSpawnPending;
+    if (!connHandshakeReady(conn)) return error.HandshakeNotComplete;
+    const alloc = conn.ep.allocator.*;
+    const qs = try alloc.create(QuicStream);
+    qs.* = .{
+        .raw = null,
+        .conn = conn,
+        .read_buf = .{},
+        .write_buf = .{},
+        .write_off = 0,
+    };
+    conn.stream_outgoing_uni_ready = qs;
+    _ = lsquic.lsquic_conn_make_uni_stream(conn.raw);
+    // on_new_stream fires synchronously; qs.raw should be set already.
+    if (qs.raw == null) {
+        conn.ep.processEngine();
+        var i: u32 = 0;
+        while (qs.raw == null and i < 10_000) : (i += 1) {
+            try poll(conn.ep, 0);
+            if (poll_peer) |p| try poll(p, 0);
+        }
+    }
+    if (qs.raw == null) {
+        if (conn.stream_outgoing_uni_ready == qs) conn.stream_outgoing_uni_ready = null;
+        qs.deinit();
+        alloc.destroy(qs);
+        return error.StreamCreateFailed;
+    }
+    return qs;
+}
+
+/// Cancel the write side of a stream, sending a QUIC RESET_STREAM frame to the peer.
+/// This is used by the ethp2p reference when a session is reconstructed (`sessCodeReconstructed`).
+/// Note: the lsquic 4.3 public API does not expose an application error code for this frame;
+/// `lsquic_stream_shutdown(SHUT_WR)` sends a FIN rather than RESET_STREAM. Use `lsquic_stream_close`
+/// as the closest available equivalent.
+pub fn streamCancelWrite(st: *QuicStream) void {
+    if (st.raw) |s| _ = lsquic.lsquic_stream_close(s);
+}
+
+/// Cancel the read side of a stream, sending a QUIC STOP_SENDING frame to the peer.
+pub fn streamCancelRead(st: *QuicStream) void {
+    if (st.raw) |s| _ = lsquic.lsquic_stream_shutdown(s, 0); // SHUT_RD
 }
 
 pub fn streamQueueWrite(st: *QuicStream, data: []const u8) !void {

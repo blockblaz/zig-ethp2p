@@ -26,7 +26,44 @@ When updating:
 
 ## QUIC / UDP transport
 
-`src/transport/eth_ec_quic.zig` mirrors **ALPN** `eth-ec-broadcast` and high-level **quic-go-style** limits from ethp2p `sim/host.go`. It does not link a QUIC implementation yet; integrating something like [`gitlab.com/devnw/zig/quic`](https://gitlab.com/devnw/zig/quic) implies extra system libs (e.g. OpenSSL on Linux/macOS in that tree), likely Zig **0.15.1+**, and CI image updates—prefer an opt-in `build.zig` step until stable.
+`src/transport/eth_ec_quic.zig` mirrors **ALPN** `eth-ec-broadcast` and high-level **quic-go-style** limits from ethp2p `sim/host.go`. With **`-Denable-quic`**, lsquic + BoringSSL is linked via `vendor/lsquic_zig`.
+
+### Why raw QUIC and why unidirectional streams
+
+**Why raw QUIC?** Direct access to QUIC's built-in multiplexing, per-stream flow control, congestion control, and RTT measurements — without adding another framing layer.
+
+**Why unidirectional streams?** P2P protocols have no client/server notion; both peers are equal and can try to open a stream to each other simultaneously. With bidirectional streams that creates a *simultaneous open* ambiguity that must be resolved in-band. Unidirectional streams eliminate the ambiguity by design: each peer opens its own send stream independently, and there is no question about which side "owns" the stream. Opening streams in QUIC is cheap (no extra round-trip), so the cost of using two half-streams instead of one full-stream is negligible.
+
+Bidirectional streams are viable when the protocol has a clear initiator (e.g. HTTP, where only the client opens streams). ethp2p deliberately chose UNI streams to keep the peer state machine stateless with respect to stream negotiation.
+
+### UNI stream alignment (issue #28)
+
+The ethp2p reference uses **unidirectional** QUIC streams for all application protocols:
+
+- `peer.go` `handshake()`: both sides call `conn.OpenUniStream()` for the BCAST control stream (IDs 2/3, 6/7, …)
+- `peer_ctrl.go` `handleSessionOpen`, `doSendChunk`: `conn.OpenUniStream()` for SESS and CHUNK streams
+- `peer_in.go` `runAcceptLoop`: `conn.AcceptUniStream()` for all inbound streams
+
+Zig alignment:
+
+- `lsquic_quic_shim.zig` detects stream type via `lsquic_stream_id() & 0x2` (bit 1 = unidirectional per RFC 9000 §2.1)
+- `incoming_uni_streams` queue holds peer-initiated UNI streams; `tryAcceptIncomingUniStream` pops them
+- `streamMakeUni` opens an outgoing UNI stream via `lsquic_conn_make_uni_stream`
+- `eth_ec_quic_peer.zig` sketches the `PeerConn` poll-driven state machine (handshake + accept-loop)
+
+### lsquic vendor patch
+
+lsquic 4.3 has no public API for user-initiated outgoing unidirectional streams (`lsquic_conn_make_stream` always creates bidirectional streams). The internal `create_uni_stream_out` function in `lsquic_full_conn_ietf.c` is `static`.
+
+Fix: `vendor/lsquic_zig/build.zig` runs `vendor/lsquic_zig/patch_uni.sh` as a build step. The script:
+1. Removes `static` from `create_uni_stream_out` in a patched copy of `lsquic_full_conn_ietf.c`
+2. Appends a public `lsquic_conn_make_uni_stream(lsquic_conn_t *)` wrapper at the end of the file
+
+The public declaration lives in `vendor/lsquic_zig/lsquic_ethp2p_ext.h`. The upstream source file is untouched.
+
+### libp2p boundary
+
+The ethp2p `sim/` QUIC transport is illustrative. Production deployments layer **libp2p** on top (Noise handshake, multistream-select, Yamux multiplexer, identify protocol). That layer is out of scope for `zig-ethp2p`; zeam handles it via **rust-libp2p**.
 
 ## EC schemes (issue [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14))
 

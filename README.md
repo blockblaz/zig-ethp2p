@@ -40,6 +40,7 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | Unsigned-varint length prefix before `RPC` body | common libp2p framing | `encodeRpcLengthPrefixed`, `decodeRpcLengthPrefixedPrefix` |
 | In-process duplex for length-prefixed `RPC` (simnet-style, no TCP/QUIC) | pair of `Endpoint`s over bounded byte queues | `sim.gossipsub_rpc_host` (`Link`, `Endpoint.sendRpc` / `recvRpcOwned`) |
 | QUIC transport | [`sim/host.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/host.go) `QUICHost`, `defaultQuicConfig` | `transport.eth_ec_quic`: default build = ALPN + config + UDP bind smoke only (`listen` / `dial` → `error.TransportNotImplemented`). **`-Denable-quic`** links **lsquic + BoringSSL** (`vendor/lsquic_zig`, shim `lsquic_quic_shim.zig`): IETF QUIC, TLS 1.3, ALPN `eth-ec-broadcast`, `listen` / `dial`, CI handshake test. See [QUIC transport](#quic-transport-optional-lsquic-build). |
+| QUIC UNI stream alignment | `peer.go` `handshake()`, `peer_ctrl.go` `handleSessionOpen`/`doSendChunk`, `peer_in.go` `runAcceptLoop` | `lsquic_quic_shim.zig` `streamMakeUni`/`tryAcceptIncomingUniStream`; vendor patch exposes `lsquic_conn_make_uni_stream` (see `vendor/lsquic_zig/patch_uni.sh` and `lsquic_ethp2p_ext.h`); `eth_ec_quic_peer.zig` `PeerConn` lifecycle sketch |
 | **Still open** | — | [Pending work](#pending-work) |
 
 ## Scope on `main` (at a glance)
@@ -86,15 +87,27 @@ Callers must **drive the engine**: after I/O, use **`quic.poll(endpoint, timeout
 
 Set **`ZIG_ETHP2P_LSQUIC_LOG=1`** (or standard **`LSQUIC_LOG_LEVEL`**) to initialize lsquic’s stderr logger and optional packet-in tracing (see shim).
 
+**UNI stream alignment (issue #28)**
+
+All ethp2p application protocols (BCAST, SESS, CHUNK) use **unidirectional** QUIC streams, matching `peer.go` `OpenUniStream`/`AcceptUniStream`. The shim now exposes:
+
+- `streamMakeUni` — open an outgoing UNI send stream (wraps patched `lsquic_conn_make_uni_stream`; see `vendor/lsquic_zig/patch_uni.sh`)
+- `tryAcceptIncomingUniStream` — pop the next peer-initiated UNI stream
+- `on_reset` callback records stream resets in `QuicStream.reset_how`
+- `streamCancelWrite` / `streamCancelRead` — close-side teardown
+- `eth_ec_quic_peer.zig` — `PeerConn` poll-driven state machine sketch (handshake + accept-loop)
+
+**lsquic vendor patch**: lsquic 4.3 has no public API for outgoing UNI streams. `vendor/lsquic_zig/build.zig` runs `patch_uni.sh` at build time, which removes `static` from `create_uni_stream_out` in a copy of `lsquic_full_conn_ietf.c` and appends a public `lsquic_conn_make_uni_stream()` wrapper. The upstream file is untouched.
+
 **Still open**
 
-QUIC **streams are not wired** to `wire.*` / broadcast sessions yet (see `eth_ec_quic.zig` and issue **#27**). Production **libp2p** integration remains separate from this stack.
+`PeerConn` is not yet wired to `Engine`/channel tables — that is follow-up work. Production **libp2p** integration (Noise, multistream-select, Yamux, identify) is separate from this stack; zeam handles that layer via **rust-libp2p**.
 
 ## Pending work
 
 What is **not** covered yet (the [implementation table](#implementation-status-vs-reference) remains authoritative for details):
 
-- **Transport:** QUIC **streams** plumbed into BCAST/SESS/CHUNK (`wire.*`) and production **libp2p** — the **lsquic + BoringSSL** path handles listen/dial and handshake when built with **`-Denable-quic`**; see [QUIC transport](#quic-transport-optional-lsquic-build).
+- **Transport:** `PeerConn` wired to `Engine`/channel tables; production **libp2p** (Noise, multistream-select, Yamux) is handled by zeam's rust-libp2p layer and is out of scope here. UNI stream alignment with `peer.go`/`peer_ctrl.go`/`peer_in.go` is done (see [QUIC UNI stream alignment](#quic-transport-optional-lsquic-build)).
 - **Gossipsub `RPC`:** protobuf extension fields beyond **`partial`** / `PartialMessagesExtension` (field 10).
 - **Erasure coding:** `layer.ec_scheme` holds the scheme enum and `"reed-solomon"` wire name; **RLNC** (strategy, preamble, chunk layout) and any further `Scheme` types remain ([#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14)).
 - **Engine:** optional channel-style event loop / `VerdictPending` for non-RS schemes.
@@ -104,8 +117,7 @@ What is **not** covered yet (the [implementation table](#implementation-status-v
 | Issue | Topic |
 |-------|-------|
 | [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) | RLNC + additional EC schemes (beyond `layer.ec_scheme` scaffold) |
-| [#26](https://github.com/ch4r10t33r/zig-ethp2p/issues/26) | QUIC transport integration (lsquic + BoringSSL; listen/dial; CI `quic-transport`) |
-| [#27](https://github.com/ch4r10t33r/zig-ethp2p/issues/27) | Map BCAST / SESS / CHUNK to QUIC streams (`wire.*`) |
+| [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) | RLNC + additional EC schemes (beyond `layer.ec_scheme` scaffold) |
 
 ## Requirements
 

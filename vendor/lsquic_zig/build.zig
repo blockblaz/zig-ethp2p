@@ -112,14 +112,31 @@ pub fn build(b: *std.Build) void {
     lib.installHeader(lshpack_dep.path("deps/xxhash/xxhash.h"), "xxhash.h");
     lib.root_module.addCMacro("XXH_HEADER_NAME", "\"xxhash.h\"");
 
+    // Patch lsquic_full_conn_ietf.c to expose create_uni_stream_out as a
+    // non-static symbol and append a public lsquic_conn_make_uni_stream()
+    // wrapper.  The patched copy lives in the Zig output cache; the
+    // original upstream file is untouched.
+    const patch_run = b.addSystemCommand(&.{"sh"});
+    patch_run.addFileArg(b.path("patch_uni.sh"));
+    patch_run.addFileArg(upstream.path("src/liblsquic/lsquic_full_conn_ietf.c"));
+    const patched_ietf = patch_run.addOutputFileArg("lsquic_full_conn_ietf.c");
+
     lib.addCSourceFiles(.{
         .root = upstream.path("src/liblsquic"),
-        .files = lsquic_files,
+        .files = lsquic_files_no_ietf,
         .flags = c_flags.items,
     });
+    // Add the patched IETF full-connection source with the same include paths
+    // as the rest of lsquic (both the public include/ and the internal src/).
+    lib.addCSourceFile(.{ .file = patched_ietf, .flags = c_flags.items });
+    lib.addIncludePath(upstream.path("src/liblsquic"));
+
     lib.addCSourceFile(.{ .file = lsqpack_dep.path("lsqpack.c"), .flags = c_flags.items });
     lib.addCSourceFile(.{ .file = lshpack_dep.path("lshpack.c"), .flags = c_flags.items });
     lib.addCSourceFile(.{ .file = lshpack_dep.path("deps/xxhash/xxhash.c"), .flags = c_flags.items });
+
+    // Install the zig-ethp2p extension header alongside lsquic's own headers.
+    lib.installHeader(b.path("lsquic_ethp2p_ext.h"), "lsquic_ethp2p_ext.h");
 
     b.installArtifact(lib);
 
@@ -127,7 +144,9 @@ pub fn build(b: *std.Build) void {
     _ = test_step;
 }
 
-const lsquic_files: []const []const u8 = &.{
+// lsquic_full_conn_ietf.c is excluded here; a patched copy is compiled
+// separately (see patch_run above) to expose create_uni_stream_out.
+const lsquic_files_no_ietf: []const []const u8 = &.{
     "ls-sfparser.c",
     "lsquic_adaptive_cc.c",
     "lsquic_alarmset.c",
@@ -155,7 +174,6 @@ const lsquic_files: []const []const u8 = &.{
     "lsquic_frame_reader.c",
     "lsquic_frame_writer.c",
     "lsquic_full_conn.c",
-    "lsquic_full_conn_ietf.c",
     "lsquic_global.c",
     "lsquic_handshake.c",
     "lsquic_hash.c",
