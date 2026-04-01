@@ -93,18 +93,18 @@ jobs:
 
   quic-transport:
     runs-on: ubuntu-latest
+    # Default job cap is 6h; without this, a hung `quic.poll` / test subprocess can burn the full budget.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install OpenSSL development headers
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev
 
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
 
-      - name: QUIC transport tests (devnw/quic + TLS)
-        run: zig build test-quic -Denable-quic --summary all
+      # `timeout` (coreutils) fails the step with 124 if the build or test binary never finishes.
+      - name: QUIC transport tests (in-repo lsquic + BoringSSL)
+        run: timeout 40m zig build test-quic -Denable-quic --summary all
 
   large-network-rs:
     runs-on: ubuntu-latest
