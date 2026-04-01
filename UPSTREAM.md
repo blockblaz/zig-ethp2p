@@ -28,6 +28,14 @@ When updating:
 
 `src/transport/eth_ec_quic.zig` mirrors **ALPN** `eth-ec-broadcast` and high-level **quic-go-style** limits from ethp2p `sim/host.go`. With **`-Denable-quic`**, lsquic + BoringSSL is linked via `vendor/lsquic_zig`.
 
+### Why raw QUIC and why unidirectional streams
+
+**Why raw QUIC?** Direct access to QUIC's built-in multiplexing, per-stream flow control, congestion control, and RTT measurements — without adding another framing layer.
+
+**Why unidirectional streams?** P2P protocols have no client/server notion; both peers are equal and can try to open a stream to each other simultaneously. With bidirectional streams that creates a *simultaneous open* ambiguity that must be resolved in-band. Unidirectional streams eliminate the ambiguity by design: each peer opens its own send stream independently, and there is no question about which side "owns" the stream. Opening streams in QUIC is cheap (no extra round-trip), so the cost of using two half-streams instead of one full-stream is negligible.
+
+Bidirectional streams are viable when the protocol has a clear initiator (e.g. HTTP, where only the client opens streams). ethp2p deliberately chose UNI streams to keep the peer state machine stateless with respect to stream negotiation.
+
 ### UNI stream alignment (issue #28)
 
 The ethp2p reference uses **unidirectional** QUIC streams for all application protocols:
