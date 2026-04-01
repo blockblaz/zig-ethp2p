@@ -26,7 +26,17 @@ When updating:
 
 ## QUIC / UDP transport
 
-`src/transport/eth_ec_quic.zig` mirrors **ALPN** `eth-ec-broadcast` and high-level **quic-go-style** limits from ethp2p `sim/host.go`. It does not link a QUIC implementation yet; integrating something like [`gitlab.com/devnw/zig/quic`](https://gitlab.com/devnw/zig/quic) implies extra system libs (e.g. OpenSSL on Linux/macOS in that tree), likely Zig **0.15.1+**, and CI image updates—prefer an opt-in `build.zig` step until stable.
+`src/transport/eth_ec_quic.zig` mirrors **ALPN** `eth-ec-broadcast` and high-level **quic-go-style** limits from ethp2p `sim/host.go`. With `-Denable-quic` it links [`gitlab.com/devnw/zig/quic`](https://gitlab.com/devnw/zig/quic) (pinned in `build.zig.zon`) and OpenSSL on non-Windows; use `zig build test-quic -Denable-quic` for the focused QUIC test binary (see `src/ci_root_quic.zig`).
+
+### macOS: integration tests skipped (handshake mutex abort)
+
+On **Darwin**, the loopback TLS+QUIC integration tests in `eth_ec_quic_enabled.zig` and `eth_ec_quic_wire_enabled.zig` are **skipped** (`error.SkipZigTest`) because they reliably crash the process (often reported as **signal 9** when not under a debugger).
+
+**Observed under lldb (Zig 0.15.1, devnw/quic 0.1.10, Homebrew OpenSSL 3):** the failure is **`EXC_BREAKPOINT`** in `libsystem_platform` `_os_unfair_lock_corruption_abort` while locking `std.Thread.Mutex` on a QUIC `Connection`. The stack is **`endpoint/incoming/module_b.zig`** `processHandshake` → `conn.*.mu.lock()` → `Thread.Mutex.DarwinImpl.lock`, after `endpoint.poll` processes an incoming datagram. It reproduces in **Debug** and **ReleaseSafe** builds of the test binary. **Linux** does not show this; CI should keep running `test-quic` there.
+
+**Not** fixed by: TLS SNI matching the embedded cert CN (`ed25519.example.com`), early `OPENSSL_init_ssl`, `quic.poll` ordering (client vs server first), `page_allocator` instead of `GeneralPurposeAllocator`, or raising test stack size. Treat as a **devnw/quic (or Zig stdlib Mutex interaction) issue on macOS** until upstream confirms otherwise.
+
+**When re-enabling:** remove the `builtin.os.tag == .macos` skip guards in those two tests and run `zig build test-quic -Denable-quic` on a Mac. Until then, `EthEcQuicConfig.tls_server_name` remains the right knob when dialing loopback to a cert issued for a DNS name (SNI must match the certificate).
 
 ## EC schemes (issue [#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14))
 

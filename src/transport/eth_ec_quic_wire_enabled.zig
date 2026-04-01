@@ -18,8 +18,9 @@ pub const QuicIoPair = struct {
     peer: *quic.QuicEndpoint,
 
     pub fn drive(self: *const QuicIoPair) !void {
-        try quic.poll(self.local, 0);
-        try quic.poll(self.peer, 0);
+        const tm = common.quic_poll_drive_timeout_ms;
+        try quic.poll(self.local, tm);
+        try quic.poll(self.peer, tm);
     }
 };
 
@@ -113,6 +114,7 @@ fn toQuicConfig(
 test "QUIC wire: BCAST handshake, SESS open, CHUNK uni over stream adapters" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     if (@import("builtin").os.tag == .wasi) return error.SkipZigTest;
+    if (@import("builtin").os.tag == .macos) return error.SkipZigTest;
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -143,6 +145,7 @@ test "QUIC wire: BCAST handshake, SESS open, CHUNK uni over stream adapters" {
 
     const client_cfg = common.EthEcQuicConfig{
         .tls_insecure_skip_verify = true,
+        .tls_server_name = test_certs.tls_cert_dns_name,
     };
     var alpn_cli = [_][]const u8{common.alpn_eth_ec_broadcast};
     var qc_cli = quic.QuicConfig{
@@ -157,25 +160,35 @@ test "QUIC wire: BCAST handshake, SESS open, CHUNK uni over stream adapters" {
     const remote_s = try std.fmt.allocPrint(alloc, "127.0.0.1:{d}", .{sport});
     defer alloc.free(remote_s);
 
-    const c_conn = try quic.connect(client_ep, remote_s, "localhost");
+    const c_conn = try quic.connect(client_ep, remote_s, test_certs.tls_cert_dns_name);
     errdefer quic.destroy(client_ep, c_conn);
 
     var s_conn: ?*quic.QuicConnection = null;
-    var rounds: u32 = 0;
-    while (rounds < 30_000) : (rounds += 1) {
-        try quic.poll(srv, 0);
-        try quic.poll(client_ep, 0);
+    const tm = common.quic_poll_drive_timeout_ms;
+    const deadline_ns = std.time.nanoTimestamp() + common.handshake_test_deadline_ns;
+    var handshake_done = false;
+    while (std.time.nanoTimestamp() < deadline_ns) {
+        try quic.poll(srv, tm);
+        try quic.poll(client_ep, tm);
         if (s_conn == null) {
             s_conn = quic.tryAccept(srv);
         }
         if (quic.handshakeComplete(c_conn)) {
             if (s_conn) |sc| {
-                if (quic.handshakeComplete(sc)) break;
+                if (quic.handshakeComplete(sc)) {
+                    handshake_done = true;
+                    break;
+                }
             }
         }
     }
 
-    const sc = s_conn orelse return error.MissingServerConnection;
+    if (!handshake_done) {
+        if (s_conn == null) return error.MissingServerConnection;
+        return error.HandshakeTimeout;
+    }
+
+    const sc = s_conn.?;
     try std.testing.expect(quic.handshakeComplete(c_conn));
     try std.testing.expect(quic.handshakeComplete(sc));
 

@@ -64,12 +64,14 @@ pub fn dialImpl(
     const remote_s = try formatSocketAddr(allocator.*, remote);
     defer allocator.*.free(remote_s);
 
-    const conn = try quic.connect(client_ep, remote_s, "localhost");
+    const sni = config.tls_server_name orelse remote.host;
+    const conn = try quic.connect(client_ep, remote_s, sni);
     errdefer quic.destroy(client_ep, conn);
 
-    var rounds: u32 = 0;
-    while (rounds < 30_000) : (rounds += 1) {
-        try quic.poll(client_ep, 0);
+    const tm = common.quic_poll_drive_timeout_ms;
+    const deadline_ns = std.time.nanoTimestamp() + common.handshake_test_deadline_ns;
+    while (std.time.nanoTimestamp() < deadline_ns) {
+        try quic.poll(client_ep, tm);
         if (quic.handshakeComplete(conn)) break;
     }
     if (!quic.handshakeComplete(conn)) return error.HandshakeTimeout;
@@ -83,6 +85,10 @@ pub fn dialImpl(
 test "QUIC listen + dial, TLS handshake, ALPN eth-ec-broadcast" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     if (@import("builtin").os.tag == .wasi) return error.SkipZigTest;
+    // devnw/quic 0.1.10 + Zig 0.15.1: on Darwin the handshake poll path hits `_os_unfair_lock_corruption_abort`
+    // locking `Connection.mu` in `endpoint/incoming/module_b.zig` (SIGKILL / EXC_BREAKPOINT without lldb).
+    // Linux CI exercises this test; track upstream before re-enabling here.
+    if (@import("builtin").os.tag == .macos) return error.SkipZigTest;
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -113,6 +119,7 @@ test "QUIC listen + dial, TLS handshake, ALPN eth-ec-broadcast" {
 
     const client_cfg = common.EthEcQuicConfig{
         .tls_insecure_skip_verify = true,
+        .tls_server_name = test_certs.tls_cert_dns_name,
     };
     var alpn_cli = [_][]const u8{common.alpn_eth_ec_broadcast};
     var qc_cli = quic.QuicConfig{
@@ -127,25 +134,35 @@ test "QUIC listen + dial, TLS handshake, ALPN eth-ec-broadcast" {
     const remote_s = try std.fmt.allocPrint(alloc, "127.0.0.1:{d}", .{sport});
     defer alloc.free(remote_s);
 
-    const conn = try quic.connect(client_ep, remote_s, "localhost");
+    const conn = try quic.connect(client_ep, remote_s, test_certs.tls_cert_dns_name);
     errdefer quic.destroy(client_ep, conn);
 
     var server_conn: ?*quic.QuicConnection = null;
-    var rounds: u32 = 0;
-    while (rounds < 30_000) : (rounds += 1) {
-        try quic.poll(srv, 0);
-        try quic.poll(client_ep, 0);
+    const tm = common.quic_poll_drive_timeout_ms;
+    const deadline_ns = std.time.nanoTimestamp() + common.handshake_test_deadline_ns;
+    var handshake_done = false;
+    while (std.time.nanoTimestamp() < deadline_ns) {
+        try quic.poll(srv, tm);
+        try quic.poll(client_ep, tm);
         if (server_conn == null) {
             server_conn = quic.tryAccept(srv);
         }
         if (quic.handshakeComplete(conn)) {
             if (server_conn) |sc| {
-                if (quic.handshakeComplete(sc)) break;
+                if (quic.handshakeComplete(sc)) {
+                    handshake_done = true;
+                    break;
+                }
             }
         }
     }
 
-    const sc = server_conn orelse return error.MissingServerConnection;
+    if (!handshake_done) {
+        if (server_conn == null) return error.MissingServerConnection;
+        return error.HandshakeTimeout;
+    }
+
+    const sc = server_conn.?;
     try std.testing.expect(quic.handshakeComplete(conn));
     try std.testing.expect(quic.handshakeComplete(sc));
 

@@ -170,9 +170,11 @@ pub fn build(b: *std.Build) void {
     const quic_ci_tests = b.addTest(.{
         .root_module = quic_ci_mod,
     });
+    // TLS + QUIC stacks are deep; default test thread stack has been marginal on macOS (SIGKILL under load).
+    quic_ci_tests.stack_size = 32 * 1024 * 1024;
     if (enable_quic) linkOpenSslNonWindows(quic_ci_tests, ci_target);
     const run_quic_ci = b.addRunArtifact(quic_ci_tests);
     run_quic_ci.has_side_effects = true;
-    const test_quic_step = b.step("test-quic", "Transport QUIC tests (use with -Denable-quic; OpenSSL on Linux/macOS)");
+    const test_quic_step = b.step("test-quic", "Transport QUIC tests (-Denable-quic; OpenSSL). Real handshake tests skip on macOS (devnw/quic + Zig Mutex issue); Linux CI runs them.");
     test_quic_step.dependOn(&run_quic_ci.step);
 }

@@ -7,6 +7,9 @@
 // Cert: self-signed, CN=ed25519.example.com, valid 2025-2035, 397 bytes.
 // Key:  PKCS#8 wrapped Ed25519 seed, 48 bytes.
 
+/// DNS name on the embedded certificate; client TLS SNI must match for the handshake to complete.
+pub const tls_cert_dns_name: []const u8 = "ed25519.example.com";
+
 /// Self-signed Ed25519 server certificate (DER).
 pub const server_cert_der: []const u8 = &.{
     0x30, 0x82, 0x01, 0x89, 0x30, 0x82, 0x01, 0x3b, 0xa0, 0x03, 0x02, 0x01, 0x02, 0x02, 0x14, 0x20,
