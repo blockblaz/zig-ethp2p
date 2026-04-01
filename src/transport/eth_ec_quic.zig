@@ -3,7 +3,7 @@
 //! With **`-Denable-quic`**, this links the in-repo **lsquic** stack under `vendor/lsquic_zig` (LiteSpeed lsquic + BoringSSL).
 //! Default builds omit that dependency; `listen` / `dial` then return `error.TransportNotImplemented`.
 //!
-//! Run `zig build test-quic -Denable-quic` for the handshake smoke test (first build compiles BoringSSL + lsquic).
+//! Run `zig build test-quic -Denable-quic` for handshake + BCAST/SESS stream smoke tests (first build compiles BoringSSL + lsquic).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -35,7 +35,7 @@ pub const EthEcQuicListener = struct {
     }
 };
 
-/// Binds a QUIC listener on `address`. Caller must drive `quic.poll` on the underlying endpoint (issue #27 will wire streams).
+/// Binds a QUIC listener on `address`. Caller must drive `quic.poll` on the underlying endpoint (and the peer when using `quic.streamMake` on loopback).
 /// `allocator` must outlive the listener until `deinit`.
 /// Errors include `error.TransportNotImplemented` without `-Denable-quic`, and `error.MissingServerIdentity` when server TLS material is absent.
 pub fn listen(allocator: *std.mem.Allocator, config: EthEcQuicConfig, address: ListenAddress) !EthEcQuicListener {
