@@ -135,9 +135,6 @@ test "QUIC listen + dial, TLS handshake, ALPN eth-ec-broadcast" {
     while (rounds < 30_000) : (rounds += 1) {
         try quic.poll(srv, 0);
         try quic.poll(client_ep, 0);
-        // `poll(..., 1)` still returns immediately while UDP is readable; an explicit sleep
-        // advances wall clock so lsquic PTO/RTX and idle alarms can fire.
-        std.Thread.sleep(1 * std.time.ns_per_ms);
         if (server_conn == null) {
             server_conn = quic.tryAccept(srv);
         }

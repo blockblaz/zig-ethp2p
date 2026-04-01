@@ -601,6 +601,20 @@ pub fn poll(ep: *QuicEndpoint, timeout_ms: u32) !void {
         while (try ep.recvOneIfAvailable()) {}
     }
     ep.processEngine();
+    // `timeout_ms == 0` is used in tight loops; without a wall-clock nudge, lsquic's
+    // advisory timers (PTO, etc.) may never elapse. Use the engine hint when present,
+    // otherwise sleep briefly so multi-engine handshakes still make progress.
+    if (timeout_ms == 0) {
+        var diff_us: c_int = 0;
+        const has_tick = lsquic.lsquic_engine_earliest_adv_tick(ep.engine, &diff_us) != 0;
+        // Cap per call so tight loops (e.g. tests) do not sleep tens of ms per poll;
+        // many iterations still accumulate enough wall time for PTO-sized delays.
+        var sleep_us: u64 = 50;
+        if (has_tick and diff_us > 0) {
+            sleep_us = @min(@as(u64, @intCast(diff_us)), 500);
+        }
+        std.Thread.sleep(sleep_us * std.time.ns_per_us);
+    }
 }
 
 pub fn tryAccept(ep: *QuicEndpoint) ?*QuicConnection {
@@ -608,11 +622,20 @@ pub fn tryAccept(ep: *QuicEndpoint) ?*QuicConnection {
     return ep.accept_queue.swapRemove(0);
 }
 
+fn connHandshakeReady(conn: *const QuicConnection) bool {
+    if (conn.hsk_ok) return true;
+    // lsquic sometimes completes the TLS+QUIC handshake without invoking `on_hsk_done`
+    // with `LSQ_HSK_OK` on the server side; `lsquic_conn_status` reflects readiness.
+    var errscratch: [1]u8 = undefined;
+    const st = lsquic.lsquic_conn_status(conn.raw, @ptrCast(&errscratch), errscratch.len);
+    return st == @as(lsquic.enum_LSQUIC_CONN_STATUS, @intCast(lsquic.LSCONN_ST_CONNECTED));
+}
+
 pub fn handshakeComplete(conn: *const QuicConnection) bool {
-    return conn.hsk_ok;
+    return connHandshakeReady(conn);
 }
 
 pub fn getNegotiatedAlpn(conn: *const QuicConnection) ?[]const u8 {
-    if (!conn.hsk_ok) return null;
+    if (!connHandshakeReady(conn)) return null;
     return conn.ep.first_alpn;
 }
