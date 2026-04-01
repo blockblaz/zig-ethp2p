@@ -96,14 +96,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install OpenSSL development headers
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev
-
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
 
-      - name: QUIC transport tests (devnw/quic + TLS)
+      - name: QUIC transport tests (in-repo lsquic + BoringSSL)
         run: zig build test-quic -Denable-quic --summary all
 
   large-network-rs:

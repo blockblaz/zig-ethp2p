@@ -1,4 +1,4 @@
-//! QUIC + TLS implementation when `-Denable-quic` is set (`gitlab.com/devnw/zig/quic`).
+//! QUIC + TLS when `-Denable-quic` is set (`src/transport/lsquic_quic_shim.zig` + `vendor/lsquic_zig`).
 
 const std = @import("std");
 const quic = @import("quic");
@@ -64,7 +64,7 @@ pub fn dialImpl(
     const remote_s = try formatSocketAddr(allocator.*, remote);
     defer allocator.*.free(remote_s);
 
-    const conn = try quic.connect(client_ep, remote_s, "localhost");
+    const conn = try quic.connect(client_ep, remote_s, remote.host);
     errdefer quic.destroy(client_ep, conn);
 
     var rounds: u32 = 0;

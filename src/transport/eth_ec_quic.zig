@@ -1,9 +1,9 @@
 //! QUIC transport for ethp2p-style EC broadcast (reference: `github.com/ethp2p/ethp2p` `sim/host.go`).
 //!
-//! With **`-Denable-quic`**, this links [`gitlab.com/devnw/zig/quic`](https://gitlab.com/devnw/zig/quic) (TLS 1.3 + QUIC v1) and OpenSSL
-//! on non-Windows. Default builds omit that dependency; `listen` / `dial` then return `error.TransportNotImplemented`.
+//! With **`-Denable-quic`**, this links the in-repo **lsquic** stack under `vendor/lsquic_zig` (LiteSpeed lsquic + BoringSSL).
+//! Default builds omit that dependency; `listen` / `dial` then return `error.TransportNotImplemented`.
 //!
-//! Run `zig build test-quic -Denable-quic` (after `libssl-dev` / equivalent) for the handshake smoke test.
+//! Run `zig build test-quic -Denable-quic` for the handshake smoke test (first build compiles BoringSSL + lsquic).
 
 const std = @import("std");
 const builtin = @import("builtin");

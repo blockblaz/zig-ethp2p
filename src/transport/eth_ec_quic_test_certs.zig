@@ -5,6 +5,8 @@
 // Generated from tls/tests/test_certs/ed25519_{cert,key}.der.
 //
 // Cert: self-signed, CN=ed25519.example.com, valid 2025-2035, 397 bytes.
+/// TLS client SNI / hostname passed to QUIC connect for this embedded test identity.
+pub const tls_server_name: []const u8 = "ed25519.example.com";
 // Key:  PKCS#8 wrapped Ed25519 seed, 48 bytes.
 
 /// Self-signed Ed25519 server certificate (DER).

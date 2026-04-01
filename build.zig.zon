@@ -8,15 +8,15 @@
         "build.zig.zon",
         "src",
         "proto",
+        "vendor",
         "UPSTREAM.md",
         "README.md",
         "LICENSE",
         "justfile",
     },
     .dependencies = .{
-        .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#bcf4a959186b4381910bed910b9ef01062882bbf",
-            .hash = "quic-0.1.10-gBIqUZ7gNQBZARuNrYktkGzRrU_V_WlU-ga_TygF1RMs",
+        .lsquic_zig = .{
+            .path = "vendor/lsquic_zig",
         },
     },
 }
