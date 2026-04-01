@@ -215,10 +215,64 @@ pub const QuicEndpoint = struct {
 };
 
 pub const QuicConnection = struct {
+    pub const Stream = struct {
+        raw: ?*lsquic.lsquic_stream_t,
+        conn: *QuicConnection,
+        read_buf: std.ArrayListUnmanaged(u8),
+        write_buf: std.ArrayListUnmanaged(u8),
+        write_off: usize,
+
+        pub fn deinit(self: *Stream) void {
+            const a = self.conn.ep.allocator.*;
+            self.read_buf.deinit(a);
+            self.write_buf.deinit(a);
+        }
+    };
+
     raw: *lsquic.lsquic_conn_t,
     ep: *QuicEndpoint,
     hsk_ok: bool,
+    incoming_streams: std.ArrayListUnmanaged(*Stream),
+    streams_owned: std.ArrayListUnmanaged(*Stream),
+    /// Client/server: `streamMake` leaves a `Stream` here until `on_new_stream` binds `raw`.
+    stream_outgoing_ready: ?*Stream,
+
+    fn freeAllStreams(self: *QuicConnection) void {
+        const a = self.ep.allocator.*;
+        if (self.stream_outgoing_ready) |p| {
+            p.deinit();
+            a.destroy(p);
+            self.stream_outgoing_ready = null;
+        }
+        self.incoming_streams.clearAndFree(a);
+        for (self.streams_owned.items) |st| {
+            st.deinit();
+            a.destroy(st);
+        }
+        self.streams_owned.clearAndFree(a);
+    }
+
+    fn removeStreamFromLists(self: *QuicConnection, st: *Stream) void {
+        var i: usize = 0;
+        while (i < self.streams_owned.items.len) {
+            if (self.streams_owned.items[i] == st) {
+                _ = self.streams_owned.swapRemove(i);
+                break;
+            }
+            i += 1;
+        }
+        i = 0;
+        while (i < self.incoming_streams.items.len) {
+            if (self.incoming_streams.items[i] == st) {
+                _ = self.incoming_streams.swapRemove(i);
+                break;
+            }
+            i += 1;
+        }
+    }
 };
+
+pub const QuicStream = QuicConnection.Stream;
 
 fn buildAlpnProtos(proto: []const u8, out: []u8) !usize {
     if (proto.len > 255 or out.len < 1 + proto.len) return error.AlpnTooLong;
@@ -361,6 +415,9 @@ fn onNewConn(stream_if_ctx: ?*anyopaque, c: ?*lsquic.lsquic_conn_t) callconv(.c)
         .raw = c.?,
         .ep = ep,
         .hsk_ok = false,
+        .incoming_streams = .{},
+        .streams_owned = .{},
+        .stream_outgoing_ready = null,
     };
     lsquic.lsquic_conn_set_ctx(c, @ptrCast(qc));
     if (ep.is_server) {
@@ -377,6 +434,7 @@ fn onNewConn(stream_if_ctx: ?*anyopaque, c: ?*lsquic.lsquic_conn_t) callconv(.c)
 fn onConnClosed(c: ?*lsquic.lsquic_conn_t) callconv(.c) void {
     const qc: ?*QuicConnection = @ptrCast(@alignCast(lsquic.lsquic_conn_get_ctx(c.?)));
     if (qc) |q| {
+        q.freeAllStreams();
         lsquic.lsquic_conn_set_ctx(c.?, null);
         if (q.ep.connect_slot == q) q.ep.connect_slot = null;
         q.ep.allocator.destroy(q);
@@ -384,24 +442,100 @@ fn onConnClosed(c: ?*lsquic.lsquic_conn_t) callconv(.c) void {
 }
 
 fn onNewStream(stream_if_ctx: ?*anyopaque, s: ?*lsquic.lsquic_stream_t) callconv(.c) ?*lsquic.lsquic_stream_ctx_t {
-    _ = stream_if_ctx;
-    _ = s;
-    return null;
+    const ep: *QuicEndpoint = @ptrCast(@alignCast(stream_if_ctx.?));
+    const alloc = ep.allocator.*;
+    if (s == null) return null;
+
+    const raw_conn = lsquic.lsquic_stream_conn(s.?);
+    const qc: *QuicConnection = @ptrCast(@alignCast(lsquic.lsquic_conn_get_ctx(raw_conn) orelse return null));
+
+    if (qc.stream_outgoing_ready) |tgt| {
+        tgt.raw = s.?;
+        lsquic.lsquic_stream_set_ctx(s.?, @ptrCast(tgt));
+        qc.stream_outgoing_ready = null;
+        qc.streams_owned.append(alloc, tgt) catch {
+            _ = lsquic.lsquic_stream_close(s.?);
+            return null;
+        };
+        _ = lsquic.lsquic_stream_wantwrite(s.?, 0);
+        _ = lsquic.lsquic_stream_wantread(s.?, 1);
+        return @ptrCast(tgt);
+    }
+
+    const inc = alloc.create(QuicStream) catch return null;
+    inc.* = .{
+        .raw = s.?,
+        .conn = qc,
+        .read_buf = .{},
+        .write_buf = .{},
+        .write_off = 0,
+    };
+    lsquic.lsquic_stream_set_ctx(s.?, @ptrCast(inc));
+    qc.streams_owned.append(alloc, inc) catch {
+        alloc.destroy(inc);
+        return null;
+    };
+    qc.incoming_streams.append(alloc, inc) catch {
+        _ = qc.streams_owned.pop();
+        alloc.destroy(inc);
+        return null;
+    };
+    _ = lsquic.lsquic_stream_wantread(s.?, 1);
+    return @ptrCast(inc);
 }
 
 fn onStreamRead(s: ?*lsquic.lsquic_stream_t, h: ?*lsquic.lsquic_stream_ctx_t) callconv(.c) void {
-    _ = s;
-    _ = h;
+    const st: *QuicStream = @ptrCast(@alignCast(h.?));
+    var chunk: [16 * 1024]u8 = undefined;
+    while (true) {
+        const n = lsquic.lsquic_stream_read(s.?, @ptrCast(&chunk), chunk.len);
+        if (n == 0) {
+            _ = lsquic.lsquic_stream_wantread(s.?, 0);
+            return;
+        }
+        if (n < 0) {
+            const e = posix.errno(@as(isize, n));
+            if (e == .AGAIN) {
+                _ = lsquic.lsquic_stream_wantread(s.?, 1);
+                return;
+            }
+            _ = lsquic.lsquic_stream_wantread(s.?, 0);
+            return;
+        }
+        const got: usize = @intCast(n);
+        st.read_buf.appendSlice(st.conn.ep.allocator.*, chunk[0..got]) catch {
+            _ = lsquic.lsquic_stream_wantread(s.?, 0);
+            return;
+        };
+    }
 }
 
 fn onStreamWrite(s: ?*lsquic.lsquic_stream_t, h: ?*lsquic.lsquic_stream_ctx_t) callconv(.c) void {
-    _ = s;
-    _ = h;
+    const st: *QuicStream = @ptrCast(@alignCast(h.?));
+    while (st.write_off < st.write_buf.items.len) {
+        const rest = st.write_buf.items[st.write_off..];
+        const n = lsquic.lsquic_stream_write(s.?, rest.ptr, rest.len);
+        if (n < 0) return;
+        if (n == 0) {
+            _ = lsquic.lsquic_stream_wantwrite(s.?, 1);
+            return;
+        }
+        st.write_off += @intCast(n);
+    }
+    st.write_buf.clearRetainingCapacity();
+    st.write_off = 0;
+    _ = lsquic.lsquic_stream_flush(s.?);
+    _ = lsquic.lsquic_stream_wantwrite(s.?, 0);
 }
 
 fn onStreamClose(s: ?*lsquic.lsquic_stream_t, h: ?*lsquic.lsquic_stream_ctx_t) callconv(.c) void {
     _ = s;
-    _ = h;
+    if (h == null) return;
+    const st: *QuicStream = @ptrCast(@alignCast(h.?));
+    st.raw = null;
+    st.conn.removeStreamFromLists(st);
+    st.deinit();
+    st.conn.ep.allocator.destroy(st);
 }
 
 fn onHskDone(c: ?*lsquic.lsquic_conn_t, status: lsquic.enum_lsquic_hsk_status) callconv(.c) void {
@@ -638,4 +772,77 @@ pub fn handshakeComplete(conn: *const QuicConnection) bool {
 pub fn getNegotiatedAlpn(conn: *const QuicConnection) ?[]const u8 {
     if (!connHandshakeReady(conn)) return null;
     return conn.ep.first_alpn;
+}
+
+/// Pop the next peer-initiated bidirectional stream, if any. Does not remove the stream from
+/// ownership tracking; it is still freed when the stream closes or the connection is destroyed.
+pub fn tryAcceptIncomingStream(conn: *QuicConnection) ?*QuicStream {
+    if (conn.incoming_streams.items.len == 0) return null;
+    return conn.incoming_streams.swapRemove(0);
+}
+
+/// Open a locally initiated bidirectional stream (calls `lsquic_conn_make_stream`). Requires a
+/// completed handshake. Drives `poll` on this connection until the stream exists or a bound is hit.
+/// When `poll_peer` is non-null, it is polled each iteration as well (needed on loopback so both
+/// engines process packets while the stream is being created).
+pub fn streamMake(conn: *QuicConnection, poll_peer: ?*QuicEndpoint) !*QuicStream {
+    if (conn.stream_outgoing_ready != null) return error.StreamSpawnPending;
+    if (!connHandshakeReady(conn)) return error.HandshakeNotComplete;
+    const alloc = conn.ep.allocator.*;
+    const qs = try alloc.create(QuicStream);
+    qs.* = .{
+        .raw = null,
+        .conn = conn,
+        .read_buf = .{},
+        .write_buf = .{},
+        .write_off = 0,
+    };
+    conn.stream_outgoing_ready = qs;
+    lsquic.lsquic_conn_make_stream(conn.raw);
+    conn.ep.processEngine();
+    var i: u32 = 0;
+    while (qs.raw == null and i < 10_000) : (i += 1) {
+        try poll(conn.ep, 0);
+        if (poll_peer) |p| try poll(p, 0);
+    }
+    if (qs.raw == null) {
+        if (conn.stream_outgoing_ready == qs) conn.stream_outgoing_ready = null;
+        qs.deinit();
+        alloc.destroy(qs);
+        return error.StreamCreateFailed;
+    }
+    return qs;
+}
+
+pub fn streamQueueWrite(st: *QuicStream, data: []const u8) !void {
+    const s = st.raw orelse return error.StreamClosed;
+    try st.write_buf.appendSlice(st.conn.ep.allocator.*, data);
+    _ = lsquic.lsquic_stream_wantwrite(s, 1);
+}
+
+/// Poll both endpoints until the queued write buffer is drained or `max_rounds` is exhausted.
+pub fn streamDrainWrites(st: *QuicStream, peer: *QuicEndpoint, max_rounds: u32) !void {
+    var r: u32 = 0;
+    while (st.write_buf.items.len > 0 and r < max_rounds) : (r += 1) {
+        try poll(st.conn.ep, 0);
+        try poll(peer, 0);
+    }
+    if (st.write_buf.items.len > 0) return error.StreamWriteTimeout;
+}
+
+/// Send-side FIN for the stream (QUIC half-close), analogous to `shutdown(SHUT_WR)`.
+pub fn streamShutdownWrite(st: *QuicStream) void {
+    if (st.raw) |s| {
+        _ = lsquic.lsquic_stream_shutdown(s, @intCast(@intFromEnum(posix.SHUT.WR)));
+    }
+}
+
+pub fn streamReadSlice(st: *const QuicStream) []const u8 {
+    return st.read_buf.items;
+}
+
+/// Drop the first `n` bytes from the stream read buffer (after successfully decoding them).
+pub fn streamConsumeReadPrefix(st: *QuicStream, n: usize) !void {
+    if (n > st.read_buf.items.len) return error.StreamReadUnderflow;
+    try st.read_buf.replaceRange(st.conn.ep.allocator.*, 0, n, &.{});
 }
