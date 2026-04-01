@@ -18,9 +18,53 @@ const ossl = @cImport({
 var g_lsquic_global: bool = false;
 var g_alpn_selected_buf: [128]u8 = undefined;
 
+/// When true, first few `lsquic_engine_packet_in` calls print ret/len/role to stderr (see env below).
+var g_trace_packet_in: bool = false;
+var g_packet_in_trace_count: u32 = 0;
+
+fn lsquicShimLogBuf(_: ?*anyopaque, buf: [*c]const u8, len: usize) callconv(.c) c_int {
+    if (len == 0) return 0;
+    _ = posix.write(posix.STDERR_FILENO, buf[0..len]) catch return -1;
+    return 0;
+}
+
+const g_lsquic_stderr_logger_if: lsquic.lsquic_logger_if = .{
+    .log_buf = lsquicShimLogBuf,
+};
+
+fn maybeInitLsquicStderrLogger() void {
+    const want_log = posix.getenv("LSQUIC_LOG_LEVEL") != null or
+        posix.getenv("LSQUIC_LOGGERLOPT") != null or blk: {
+        const z = posix.getenv("ZIG_ETHP2P_LSQUIC_LOG") orelse break :blk false;
+        break :blk z.len > 0 and !std.mem.eql(u8, z, "0");
+    };
+    if (!want_log) return;
+
+    lsquic.lsquic_logger_init(&g_lsquic_stderr_logger_if, null, lsquic.LLTS_NONE);
+    g_trace_packet_in = true;
+
+    if (posix.getenv("LSQUIC_LOGGERLOPT")) |raw| {
+        var stack: [512]u8 = undefined;
+        if (raw.len >= stack.len) return;
+        @memcpy(stack[0..raw.len], raw);
+        stack[raw.len] = 0;
+        _ = lsquic.lsquic_logger_lopt(@ptrCast(&stack));
+        return;
+    }
+
+    const raw_level = posix.getenv("LSQUIC_LOG_LEVEL") orelse (posix.getenv("ZIG_ETHP2P_LSQUIC_LOG") orelse "debug");
+    const use_level: []const u8 = if (std.mem.eql(u8, raw_level, "1")) "debug" else raw_level;
+    var level_buf: [96]u8 = undefined;
+    if (use_level.len >= level_buf.len) return;
+    @memcpy(level_buf[0..use_level.len], use_level);
+    level_buf[use_level.len] = 0;
+    _ = lsquic.lsquic_set_log_level(@ptrCast(&level_buf));
+}
+
 fn ensureLsquicGlobal() void {
     if (g_lsquic_global) return;
     _ = lsquic.lsquic_global_init(lsquic.LSQUIC_GLOBAL_CLIENT | lsquic.LSQUIC_GLOBAL_SERVER);
+    maybeInitLsquicStderrLogger();
     g_lsquic_global = true;
 }
 
@@ -134,7 +178,7 @@ pub const QuicEndpoint = struct {
             break :blk @ptrCast(@alignCast(&self.local_addr.any));
         };
 
-        _ = lsquic.lsquic_engine_packet_in(
+        const pin_ret = lsquic.lsquic_engine_packet_in(
             self.engine,
             buf[0..@intCast(n)].ptr,
             @intCast(n),
@@ -143,6 +187,17 @@ pub const QuicEndpoint = struct {
             self,
             0,
         );
+        if (g_trace_packet_in) {
+            const c = g_packet_in_trace_count;
+            if (c < 32) {
+                g_packet_in_trace_count = c + 1;
+                std.debug.print("zig-ethp2p lsquic_engine_packet_in: ret={d} len={d} server={any}\n", .{
+                    pin_ret,
+                    n,
+                    self.is_server,
+                });
+            }
+        }
         self.processEngine();
         return true;
     }
@@ -238,6 +293,23 @@ fn makeSslCtxClient(allow_insecure: bool, alpn_wire: []const u8) !*ossl.SSL_CTX 
     if (ossl.SSL_CTX_set_min_proto_version(ctx, ossl.TLS1_3_VERSION) == 0) return error.TlsInit;
     if (ossl.SSL_CTX_set_max_proto_version(ctx, ossl.TLS1_3_VERSION) == 0) return error.TlsInit;
     _ = ossl.SSL_CTX_set_default_verify_paths(ctx);
+
+    // BoringSSL's default TLS 1.3 ClientHello omits Ed25519. A server certificate
+    // signed with Ed25519 then fails with TLS alert 40 (handshake_failure).
+    const verify_prefs = [_]u16{
+        ossl.SSL_SIGN_ED25519,
+        ossl.SSL_SIGN_ECDSA_SECP256R1_SHA256,
+        ossl.SSL_SIGN_ECDSA_SECP384R1_SHA384,
+        ossl.SSL_SIGN_ECDSA_SECP521R1_SHA512,
+        ossl.SSL_SIGN_RSA_PKCS1_SHA256,
+        ossl.SSL_SIGN_RSA_PKCS1_SHA384,
+        ossl.SSL_SIGN_RSA_PKCS1_SHA512,
+        ossl.SSL_SIGN_RSA_PSS_RSAE_SHA256,
+        ossl.SSL_SIGN_RSA_PSS_RSAE_SHA384,
+        ossl.SSL_SIGN_RSA_PSS_RSAE_SHA512,
+    };
+    if (ossl.SSL_CTX_set_verify_algorithm_prefs(ctx, &verify_prefs, verify_prefs.len) == 0)
+        return error.TlsInit;
 
     if (ossl.SSL_CTX_set_alpn_protos(ctx, alpn_wire.ptr, @intCast(alpn_wire.len)) != 0) return error.TlsInit;
 
@@ -404,6 +476,9 @@ pub fn endpointInit(allocator: *std.mem.Allocator, bind_s: []const u8, qc: *Quic
     var settings: lsquic.lsquic_engine_settings = undefined;
     lsquic.lsquic_engine_init_settings(&settings, flags_eng);
     settings.es_versions = lsquic.LSQUIC_IETF_VERSIONS;
+    // Avoid AL_IDLE "lack of progress" while a connection is still completing setup
+    // (common when the app drives the engine in a tight loop).
+    settings.es_noprogress_timeout = 0;
     if (is_server) {
         // Default server `es_support_srej` issues Retry on tokenless Initials; that path
         // can strand the handshake for loopback tests that expect a single mini→full flow.
