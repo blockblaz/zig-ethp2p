@@ -67,7 +67,7 @@ Enable the full stack with **`-Denable-quic`** on the `zig build` command line (
 | `build.zig` | `-Denable-quic` pulls **`lsquic_zig`** (LiteSpeed **lsquic** + **BoringSSL**), exposes Zig module `quic` rooted at `src/transport/lsquic_quic_shim.zig`, links **zlib** (+ **pthread** / **m** on Unix). **Windows** is rejected for this flag (upstream build focus). |
 | `lsquic_quic_shim.zig` | Endpoint/connection/stream API: UDP I/O, `poll`, `connect`, `tryAccept`, `handshakeComplete`, `streamMake` (bidi), `streamMakeUni` (UNI), `tryAcceptIncomingUniStream`, stream read/write/cancel helpers. |
 | `eth_ec_quic_common.zig` / `eth_ec_quic_enabled.zig` | Shared config and ALPN string; **enabled** path implements `listenImpl` / `dialImpl` and integration tests. |
-| `eth_ec_quic.zig` | Public `transport.eth_ec_quic`: `listen`, `dial`, listener wrapper. |
+| `eth_ec_quic.zig` | Public `transport.eth_ec_quic`: `listen`, `dial`, `logInit` (programmatic lsquic logger), listener wrapper. |
 | `eth_ec_quic_peer.zig` | `PeerConn` poll-driven state machine: `idle → handshaking → active → closed`; symmetric BCAST UNI handshake + `runAcceptLoop` dispatch by protocol selector byte. |
 | `vendor/lsquic_zig/patch_uni.sh` | Build-time patch that removes `static` from `create_uni_stream_out` in lsquic and appends a public `lsquic_conn_make_uni_stream()` wrapper (lsquic 4.3 has no public API for outgoing UNI streams). |
 
@@ -86,7 +86,7 @@ All ethp2p application protocols use UNI streams — both peers independently op
 
 **Debugging**
 
-Set **`ZIG_ETHP2P_LSQUIC_LOG=1`** (or standard **`LSQUIC_LOG_LEVEL`**) to initialize lsquic's stderr logger and optional packet-in tracing (see shim).
+Call **`quic.logInit("debug")`** (or any `lsquic_set_log_level` level) to enable lsquic's stderr logger programmatically.  Alternatively, set the env var **`ZIG_ETHP2P_LSQUIC_LOG=1`** (or **`LSQUIC_LOG_LEVEL`**) before the first `listen`/`dial`; the shim picks that up on first use.
 
 ## Pending work
 
