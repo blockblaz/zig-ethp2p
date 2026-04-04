@@ -17,6 +17,7 @@ const ossl = @cImport({
 });
 
 var g_lsquic_global: bool = false;
+var g_lsquic_logging: bool = false;
 var g_alpn_selected_buf: [128]u8 = undefined;
 
 /// When true, first few `lsquic_engine_packet_in` calls print ret/len/role to stderr (see env below).
@@ -29,22 +30,46 @@ fn lsquicShimLogBuf(_: ?*anyopaque, buf: [*c]const u8, len: usize) callconv(.c) 
     return 0;
 }
 
-const g_lsquic_stderr_logger_if: lsquic.lsquic_logger_if = .{
+const g_lsquic_logger_if: lsquic.lsquic_logger_if = .{
     .log_buf = lsquicShimLogBuf,
 };
 
-fn maybeInitLsquicStderrLogger() void {
-    const want_log = posix.getenv("LSQUIC_LOG_LEVEL") != null or
-        posix.getenv("LSQUIC_LOGGERLOPT") != null or blk: {
-        const z = posix.getenv("ZIG_ETHP2P_LSQUIC_LOG") orelse break :blk false;
-        break :blk z.len > 0 and !std.mem.eql(u8, z, "0");
-    };
-    if (!want_log) return;
-
-    lsquic.lsquic_logger_init(&g_lsquic_stderr_logger_if, null, lsquic.LLTS_NONE);
+/// Initialise lsquic logging to stderr at `level` (e.g. `"debug"`, `"info"`, `"warn"`).
+///
+/// This is the programmatic alternative to the `ZIG_ETHP2P_LSQUIC_LOG` / `LSQUIC_LOG_LEVEL`
+/// environment variables.  Call it any time after `endpointInit`; calling it before is also
+/// fine — `endpointInit` calls `lsquic_global_init` lazily on first use.
+///
+/// `lsquic_logger_init` registers a custom `log_buf` callback; the output destination is
+/// entirely controlled by that callback.  The callback installed here writes to stderr.
+/// Callers that need a different destination should call `lsquic_logger_init` directly with
+/// their own `lsquic_logger_if` before calling `endpointInit`.
+pub fn logInit(level: []const u8) void {
+    ensureLsquicGlobal();
+    applyLsquicLogLevel(level);
     g_trace_packet_in = true;
+}
 
+fn applyLsquicLogLevel(level: []const u8) void {
+    if (!g_lsquic_logging) {
+        lsquic.lsquic_logger_init(&g_lsquic_logger_if, null, lsquic.LLTS_NONE);
+        g_lsquic_logging = true;
+    }
+    const use_level: []const u8 = if (std.mem.eql(u8, level, "1")) "debug" else level;
+    var buf: [96]u8 = undefined;
+    if (use_level.len >= buf.len) return;
+    @memcpy(buf[0..use_level.len], use_level);
+    buf[use_level.len] = 0;
+    _ = lsquic.lsquic_set_log_level(@ptrCast(&buf));
+}
+
+fn maybeInitLsquicLoggerFromEnv() void {
     if (posix.getenv("LSQUIC_LOGGERLOPT")) |raw| {
+        if (!g_lsquic_logging) {
+            lsquic.lsquic_logger_init(&g_lsquic_logger_if, null, lsquic.LLTS_NONE);
+            g_lsquic_logging = true;
+        }
+        g_trace_packet_in = true;
         var stack: [512]u8 = undefined;
         if (raw.len >= stack.len) return;
         @memcpy(stack[0..raw.len], raw);
@@ -52,20 +77,19 @@ fn maybeInitLsquicStderrLogger() void {
         _ = lsquic.lsquic_logger_lopt(@ptrCast(&stack));
         return;
     }
-
-    const raw_level = posix.getenv("LSQUIC_LOG_LEVEL") orelse (posix.getenv("ZIG_ETHP2P_LSQUIC_LOG") orelse "debug");
-    const use_level: []const u8 = if (std.mem.eql(u8, raw_level, "1")) "debug" else raw_level;
-    var level_buf: [96]u8 = undefined;
-    if (use_level.len >= level_buf.len) return;
-    @memcpy(level_buf[0..use_level.len], use_level);
-    level_buf[use_level.len] = 0;
-    _ = lsquic.lsquic_set_log_level(@ptrCast(&level_buf));
+    const level = posix.getenv("LSQUIC_LOG_LEVEL") orelse blk: {
+        const z = posix.getenv("ZIG_ETHP2P_LSQUIC_LOG") orelse return;
+        if (z.len == 0 or std.mem.eql(u8, z, "0")) return;
+        break :blk z;
+    };
+    applyLsquicLogLevel(level);
+    g_trace_packet_in = true;
 }
 
 fn ensureLsquicGlobal() void {
     if (g_lsquic_global) return;
     _ = lsquic.lsquic_global_init(lsquic.LSQUIC_GLOBAL_CLIENT | lsquic.LSQUIC_GLOBAL_SERVER);
-    maybeInitLsquicStderrLogger();
+    maybeInitLsquicLoggerFromEnv();
     g_lsquic_global = true;
 }
 

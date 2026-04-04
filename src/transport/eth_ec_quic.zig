@@ -14,6 +14,19 @@ pub const alpn_eth_ec_broadcast = common.alpn_eth_ec_broadcast;
 pub const EthEcQuicConfig = common.EthEcQuicConfig;
 pub const ListenAddress = common.ListenAddress;
 
+/// Initialise lsquic logging to stderr at `level` (e.g. `"debug"`, `"info"`, `"warn"`).
+///
+/// This is the programmatic counterpart to the `ZIG_ETHP2P_LSQUIC_LOG` / `LSQUIC_LOG_LEVEL`
+/// environment variables.  Either mechanism may be used; calling `logInit` wins over the
+/// env vars when both are present because `lsquic_set_log_level` is idempotent and the last
+/// call takes effect.
+///
+/// Without `-Denable-quic` this is a no-op.
+pub fn logInit(level: []const u8) void {
+    if (comptime !build_opts.enable_quic) return;
+    @import("quic").logInit(level);
+}
+
 pub const EthEcQuicListener = struct {
     inner: if (build_opts.enable_quic) struct {
         ep: *@import("quic").QuicEndpoint,
