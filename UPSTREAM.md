@@ -2,6 +2,23 @@
 
 This repository tracks **[ethp2p](https://github.com/ethp2p/ethp2p)**.
 
+## Mapping policy
+
+**zig-ethp2p must be a like-for-like port of ethp2p.**
+
+Every constant, parameter, wire format detail, and behavioural constraint in the Go reference has a direct Zig counterpart — same value, same semantics, same name where idiomatic Zig allows it. Nothing is omitted, approximated, or left as a comment.
+
+Concretely this means:
+
+- **Constants and parameters**: every numeric constant or configuration value in the Go source (mesh degree, heartbeat interval, queue depths, frame size limits, etc.) is exported as a typed Zig constant in the corresponding module.
+- **Wire format**: byte layout, field order, protobuf field numbers, and length-prefix conventions match the Go implementation exactly. Golden-byte tests lock this down.
+- **Protocol behaviour**: stream open/accept patterns, selector bytes, handshake sequences, and error handling mirror the Go reference. When the Go code makes a deliberate choice (e.g. unidirectional QUIC streams, `StrictNoSign`), the Zig code encodes that choice explicitly — not as a side effect.
+- **Test coverage**: every mirrored value or behaviour is exercised by at least one test that would fail if the reference changes.
+
+When reviewing an upstream diff, ask for **each changed line in the Go source**: *does the Zig side have a corresponding constant, type, or behaviour that must change?* If yes, change it. Do not skip a change because the Zig code happens to produce the same result for an unrelated reason.
+
+The only items excluded from like-for-like porting are those that depend on Go/libp2p runtime internals with no Zig equivalent (e.g. `go-libp2p` host lifecycle, `context.Context` cancellation). Document any such exclusion explicitly in the relevant section below.
+
 ## Zig toolchain
 
 `build.zig.zon` `minimum_zig_version` must match the `ZIG_VERSION` environment variable in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). CI fails the job if they differ, so bump both when raising the supported Zig release.
@@ -19,10 +36,11 @@ Changes since the previous pin (`125bdaa`):
   - `HistoryLength`: 1000 → 6; `HistoryGossip`: 1000 → 3.
   - Added `StrictNoSign` + `NoAuthor`: messages carry no `from`/`seqno`/`signature`/`key` fields.
   - Added `PeerOutboundQueueSize(600)`, `ValidateQueueSize(600)`.
-  - **zig-ethp2p impact**: none. `FanoutMesh` is an abstract in-process model with no message
-    cache. `GossipMessageRef` already defaults `from`/`seqno`/`signature`/`key` to `null`; all
-    tests use messages with only `topic` and `data` set — matching `StrictNoSign`/`NoAuthor`.
-    Queue sizes have no Zig equivalent.
+  - **zig-ethp2p impact**: all concrete parameters added as exported constants in
+    `sim/gossipsub_transport.zig` (`mesh_d`, `mesh_d_lo`, `mesh_d_hi`, `mesh_d_lazy`,
+    `heartbeat_interval_ms`, `fanout_ttl_ms`, `history_length`, `history_gossip`,
+    `max_message_size`, `peer_outbound_queue_size`, `validate_queue_size`, `strict_no_sign`).
+    A test asserts every value against its reference so future upstream changes are caught.
 
 When updating:
 
