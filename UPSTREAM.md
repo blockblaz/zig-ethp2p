@@ -10,9 +10,19 @@ This repository tracks **[ethp2p](https://github.com/ethp2p/ethp2p)**.
 
 The vendored `.proto` files and golden test vectors were checked against reference commit:
 
-`125bdaa3985a8cbe9f24d53155828312777b73fc`
+`db6e9417d0bbab9ded28aa3053211cdecff402ac`
 
-As of the last maintenance pass, **ethp2p** `main` still points at this commit, so `proto/*.proto` matched `broadcast/pb/`, `protocol/pb/`, and `broadcast/rs/pb/` in that tree without edits.
+Changes since the previous pin (`125bdaa`):
+
+- `sim/strategy_gossipsub.go` (`db6e941`): gossipsub params aligned with Prysm
+  (`beacon-chain/p2p/pubsub.go`).
+  - `HistoryLength`: 1000 → 6; `HistoryGossip`: 1000 → 3.
+  - Added `StrictNoSign` + `NoAuthor`: messages carry no `from`/`seqno`/`signature`/`key` fields.
+  - Added `PeerOutboundQueueSize(600)`, `ValidateQueueSize(600)`.
+  - **zig-ethp2p impact**: none. `FanoutMesh` is an abstract in-process model with no message
+    cache. `GossipMessageRef` already defaults `from`/`seqno`/`signature`/`key` to `null`; all
+    tests use messages with only `topic` and `data` set — matching `StrictNoSign`/`NoAuthor`.
+    Queue sizes have no Zig equivalent.
 
 When updating:
 

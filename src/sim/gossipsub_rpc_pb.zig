@@ -4,6 +4,11 @@
 //! stream framing. `RPC.partial` (field 10) is supported as an opaque length-delimited payload;
 //! use `PartialMessagesExtension` helpers to build or parse that body. Other extension field
 //! numbers are still skipped on decode.
+//!
+//! The ethp2p reference simulation uses `StrictNoSign` + `NoAuthor` (Prysm-aligned, `db6e941`),
+//! so gossip `Message` objects on the wire carry only `data` and `topic`; `from`, `seqno`,
+//! `signature`, and `key` are absent. `GossipMessageRef` defaults all of those to `null`, which
+//! produces the correct (absent) encoding.
 
 const std = @import("std");
 const varint = @import("../wire/varint.zig");
