@@ -12,6 +12,9 @@ pub const alpn_eth_ec_broadcast = common.alpn_eth_ec_broadcast;
 pub const EthEcQuicConfig = common.EthEcQuicConfig;
 pub const ListenAddress = common.ListenAddress;
 
+/// Re-export so callers outside the zig-ethp2p package can name the type.
+pub const QuicEndpoint = quic.QuicEndpoint;
+
 /// Initialise lsquic logging to stderr at `level` (e.g. `"debug"`, `"info"`, `"warn"`).
 ///
 /// This is the programmatic counterpart to the `ZIG_ETHP2P_LSQUIC_LOG` / `LSQUIC_LOG_LEVEL`
@@ -54,10 +57,41 @@ pub fn dial(allocator: *std.mem.Allocator, config: EthEcQuicConfig, remote: List
     return enabled.dialImpl(allocator, config, remote);
 }
 
+/// Create a QUIC listener on an already-bound external socket fd.
+/// The caller retains ownership of `fd`; `deinit` on the returned listener will not close it.
+/// `local_addr` must reflect the address the fd is bound to.
+pub fn listenOnFd(
+    allocator: *std.mem.Allocator,
+    fd: std.posix.fd_t,
+    local_addr: std.net.Address,
+    config: EthEcQuicConfig,
+) !EthEcQuicListener {
+    const enabled = @import("eth_ec_quic_enabled.zig");
+    const ep = try enabled.listenImplFromFd(allocator, fd, local_addr, config);
+    return .{ .ep = ep, .port = local_addr.getPort(), .allocator = allocator };
+}
+
 /// Drive one poll round on the listener's QUIC endpoint.
 /// `timeout_ms` is the maximum time to block waiting for I/O events.
 pub fn pollListener(listener: *EthEcQuicListener, timeout_ms: u32) !void {
     try quic.poll(listener.ep, timeout_ms);
+}
+
+/// Feed a datagram received on a shared socket into the QUIC engine.
+/// Call `processEngineOnly` after draining all packets.
+pub fn feedPacket(
+    listener: *EthEcQuicListener,
+    data: []const u8,
+    peer: std.net.Address,
+    local: std.net.Address,
+) void {
+    quic.feedPacket(listener.ep, data, peer, local);
+}
+
+/// Run pending QUIC timers and flush outbound packets without reading from the socket.
+/// Use this when a shared UDP socket owns the recv loop.
+pub fn processEngineOnly(listener: *EthEcQuicListener) void {
+    quic.processEngineOnly(listener.ep);
 }
 
 test "ALPN matches ethp2p QUIC host" {

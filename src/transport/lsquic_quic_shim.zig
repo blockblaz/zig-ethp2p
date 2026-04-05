@@ -119,6 +119,8 @@ pub const QuicEndpoint = struct {
     sni_z: ?[:0]u8 = null,
     settings: lsquic.lsquic_engine_settings,
     api: lsquic.lsquic_engine_api,
+    /// When false the caller owns the underlying fd; `endpointDeinit` will not close it.
+    owns_sock: bool = true,
 
     fn isWildcardLocal(addr: std.net.Address) bool {
         return switch (addr.any.family) {
@@ -783,12 +785,126 @@ pub fn endpointDeinit(ep: *QuicEndpoint) void {
         ep.processEngine();
     }
     lsquic.lsquic_engine_destroy(ep.engine);
-    posix.close(ep.sock);
+    if (ep.owns_sock) posix.close(ep.sock);
     ossl.SSL_CTX_free(ep.ssl_ctx);
     if (ep.sni_z) |s| ep.allocator.free(s);
     ep.allocator.free(ep.alpn_wire);
     ep.allocator.free(ep.alpn_cstr);
     ep.allocator.destroy(ep);
+}
+
+/// Create a QUIC endpoint on an already-bound external socket.
+/// The caller retains ownership of `sock`; `endpointDeinit` will not close it.
+/// `local_addr` must reflect the bound address (used by lsquic for packet routing).
+pub fn endpointInitFromFd(
+    allocator: *std.mem.Allocator,
+    sock: posix.socket_t,
+    local_addr: std.net.Address,
+    qc: *QuicConfig,
+) !*QuicEndpoint {
+    ensureLsquicGlobal();
+
+    const is_server = qc.inline_server_cert_der != null;
+
+    const first_alpn = qc.alpn.*[0];
+    const alpn_wire = try allocator.alloc(u8, 1 + first_alpn.len);
+    errdefer allocator.free(alpn_wire);
+    const wlen = try buildAlpnProtos(first_alpn, alpn_wire);
+    if (wlen != alpn_wire.len) return error.AlpnTooLong;
+
+    const alpn_cstr = try allocator.allocSentinel(u8, first_alpn.len, 0);
+    errdefer allocator.free(alpn_cstr);
+    @memcpy(alpn_cstr[0..first_alpn.len], first_alpn);
+
+    const ssl_ctx: *ossl.SSL_CTX = if (is_server) blk: {
+        const cert = qc.inline_server_cert_der orelse return error.TlsInit;
+        const key = qc.inline_server_priv_p256 orelse return error.TlsInit;
+        break :blk try makeSslCtxServer(cert, key);
+    } else try makeSslCtxClient(qc.allow_insecure, alpn_wire);
+    errdefer ossl.SSL_CTX_free(ssl_ctx);
+
+    var flags_eng: c_uint = 0;
+    if (is_server) flags_eng |= lsquic.LSENG_SERVER;
+
+    var settings: lsquic.lsquic_engine_settings = undefined;
+    lsquic.lsquic_engine_init_settings(&settings, flags_eng);
+    settings.es_versions = lsquic.LSQUIC_IETF_VERSIONS;
+    settings.es_noprogress_timeout = 0;
+    if (is_server) settings.es_support_srej = 0;
+    const idle_s: u32 = @intCast(@max(1, qc.max_idle_timeout_ms / std.time.ms_per_s));
+    settings.es_idle_timeout = @min(idle_s, 600);
+    settings.es_base_plpmtu = @truncate(qc.max_udp_payload);
+
+    var err_buf: [256]u8 = undefined;
+    if (lsquic.lsquic_engine_check_settings(&settings, flags_eng, &err_buf, err_buf.len) != 0) {
+        return error.TlsInit;
+    }
+
+    var api = std.mem.zeroes(lsquic.lsquic_engine_api);
+    api.ea_settings = &settings;
+    api.ea_stream_if = &stream_if;
+    api.ea_stream_if_ctx = undefined;
+    api.ea_packets_out = packetsOut;
+    api.ea_packets_out_ctx = undefined;
+    api.ea_get_ssl_ctx = getSslCtx;
+    api.ea_alpn = alpn_cstr.ptr;
+
+    const ep = try allocator.create(QuicEndpoint);
+    errdefer allocator.destroy(ep);
+    ep.* = .{
+        .sock = sock,
+        .engine = undefined,
+        .ssl_ctx = ssl_ctx,
+        .allocator = allocator,
+        .is_server = is_server,
+        .local_addr = local_addr,
+        .resolved_local = null,
+        .accept_queue = .{},
+        .connect_slot = null,
+        .first_alpn = first_alpn,
+        .alpn_wire = alpn_wire,
+        .alpn_cstr = alpn_cstr,
+        .base_plpmtu = @truncate(qc.max_udp_payload),
+        .sni_z = null,
+        .settings = settings,
+        .api = undefined,
+        .owns_sock = false,
+    };
+    api.ea_stream_if_ctx = ep;
+    api.ea_packets_out_ctx = ep;
+    ep.api = api;
+
+    const eng = lsquic.lsquic_engine_new(flags_eng, &ep.api) orelse return error.TlsInit;
+    ep.engine = eng;
+
+    return ep;
+}
+
+/// Feed a pre-received datagram into the QUIC engine.
+/// Called by a shared UDP socket demultiplexer after routing the packet to QUIC.
+/// Does not run the engine; call `processEngineOnly` after draining all packets.
+pub fn feedPacket(
+    ep: *QuicEndpoint,
+    data: []const u8,
+    peer: std.net.Address,
+    local: std.net.Address,
+) void {
+    const local_sa: ?*const lsquic.struct_sockaddr = @ptrCast(@alignCast(&local.any));
+    _ = lsquic.lsquic_engine_packet_in(
+        ep.engine,
+        data.ptr,
+        data.len,
+        local_sa,
+        @ptrCast(@alignCast(&peer.any)),
+        ep,
+        0,
+    );
+}
+
+/// Run pending lsquic timers and flush unsent packets without reading from the socket.
+/// Used when a shared UDP socket owns the recv loop and drives packet injection via `feedPacket`.
+pub fn processEngineOnly(ep: *QuicEndpoint) void {
+    ep.processEngine();
 }
 
 pub fn connect(ep: *QuicEndpoint, remote_s: []const u8, hostname: []const u8) !*QuicConnection {

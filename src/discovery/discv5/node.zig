@@ -72,6 +72,9 @@ pub const Node = struct {
 
     /// UDP socket file descriptor (null when stopped).
     socket: ?std.posix.fd_t = null,
+    /// True when this node created and owns the socket (must close on stop/deinit).
+    /// False when an external caller supplied the fd via `startFromFd`.
+    owns_socket: bool = true,
 
     /// In-flight requests.
     pending: std.ArrayListUnmanaged(PendingRequest) = .{},
@@ -106,16 +109,18 @@ pub const Node = struct {
     }
 
     pub fn deinit(self: *Node) void {
-        if (self.socket) |sock| {
-            std.posix.close(sock);
-            self.socket = null;
+        if (self.owns_socket) {
+            if (self.socket) |sock| {
+                std.posix.close(sock);
+                self.socket = null;
+            }
         }
         self.pending.deinit(self.allocator);
         self.enr_cache.deinit(self.allocator);
         self.sessions.deinit();
     }
 
-    /// Bind the UDP socket and start the node.
+    /// Bind a new UDP socket and start the node.
     pub fn start(self: *Node) !void {
         const addr = self.config.listen_addr;
         const sock = try std.posix.socket(
@@ -125,14 +130,27 @@ pub const Node = struct {
         );
         try std.posix.bind(sock, &addr.any, addr.getOsSockLen());
         self.socket = sock;
+        self.owns_socket = true;
+        self.state = .running;
+    }
+
+    /// Attach an externally-owned UDP socket and start the node without binding.
+    /// The caller retains ownership of `fd` and must not close it while the node
+    /// is running.  `poll` will skip the internal recv loop; the caller is
+    /// expected to drain packets and deliver them via `injectDatagram`.
+    pub fn startFromFd(self: *Node, fd: std.posix.fd_t) void {
+        self.socket = fd;
+        self.owns_socket = false;
         self.state = .running;
     }
 
     pub fn stop(self: *Node) void {
-        if (self.socket) |sock| {
-            std.posix.close(sock);
-            self.socket = null;
+        if (self.owns_socket) {
+            if (self.socket) |sock| {
+                std.posix.close(sock);
+            }
         }
+        self.socket = null;
         self.state = .stopped;
     }
 
@@ -146,9 +164,12 @@ pub const Node = struct {
     pub fn poll(self: *Node, now_ns: u64) u64 {
         self.last_poll_ns = now_ns;
 
-        // Receive available datagrams.
-        if (self.socket) |sock| {
-            self.recvLoop(sock);
+        // Receive available datagrams — only when we own the socket.
+        // With an external fd the caller drives recv via injectDatagram.
+        if (self.owns_socket) {
+            if (self.socket) |sock| {
+                self.recvLoop(sock);
+            }
         }
 
         self.expireRequests(now_ns);
@@ -194,6 +215,21 @@ pub const Node = struct {
             .whoareyou => |w| self.handleWhoareyou(w.header, w.auth, from),
             .handshake => |h| self.handleHandshake(h.header, h.auth, h.encrypted_body, from),
         }
+    }
+
+    /// Attempt to decode and process a datagram received from an external source
+    /// (e.g. a shared UDP socket).  Returns `true` when the datagram was valid
+    /// discv5 and has been processed; `false` when it should be forwarded elsewhere
+    /// (e.g. to a co-located QUIC endpoint).
+    pub fn injectDatagram(self: *Node, data: []const u8, from: std.net.Address) bool {
+        var hdr_buf: [packet.static_header_len + 300 + 32]u8 = undefined;
+        const pkt = packet.decode(data, self.local_id, &hdr_buf) catch return false;
+        switch (pkt) {
+            .ordinary => |o| self.handleOrdinary(o.header, o.auth, o.encrypted_body, from),
+            .whoareyou => |w| self.handleWhoareyou(w.header, w.auth, from),
+            .handshake => |h| self.handleHandshake(h.header, h.auth, h.encrypted_body, from),
+        }
+        return true;
     }
 
     fn handleOrdinary(

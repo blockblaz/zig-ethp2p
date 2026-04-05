@@ -92,6 +92,18 @@ pub fn listenImpl(
     return try quic.endpointInit(allocator, bind_s, &qc);
 }
 
+/// Create a QUIC server endpoint on an already-bound external socket fd.
+pub fn listenImplFromFd(
+    allocator: *std.mem.Allocator,
+    fd: std.posix.fd_t,
+    local_addr: std.net.Address,
+    config: common.EthEcQuicConfig,
+) !*quic.QuicEndpoint {
+    var alpn_list = [_][]const u8{common.alpn_eth_ec_broadcast};
+    var qc = toQuicConfig(config, &alpn_list);
+    return try quic.endpointInitFromFd(allocator, fd, local_addr, &qc);
+}
+
 pub fn dialImpl(
     allocator: *std.mem.Allocator,
     config: common.EthEcQuicConfig,
