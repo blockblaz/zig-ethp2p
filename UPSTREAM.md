@@ -54,7 +54,7 @@ When updating:
 
 ## QUIC / UDP transport
 
-`src/transport/eth_ec_quic.zig` mirrors **ALPN** `eth-ec-broadcast` and high-level **quic-go-style** limits from ethp2p `sim/host.go`. With **`-Denable-quic`**, lsquic + BoringSSL is linked via `vendor/lsquic_zig`.
+`src/transport/eth_ec_quic.zig` mirrors **ALPN** `eth-ec-broadcast` and high-level **quic-go-style** limits from ethp2p `sim/host.go`. lsquic + BoringSSL are always linked via `vendor/lsquic_zig` (no build flag needed).
 
 ### Why raw QUIC and why unidirectional streams
 

@@ -1,4 +1,4 @@
-//! QUIC + TLS when `-Denable-quic` is set (`src/transport/lsquic_quic_shim.zig` + `vendor/lsquic_zig`).
+//! QUIC + TLS implementation (`src/transport/lsquic_quic_shim.zig` + `vendor/lsquic_zig`).
 
 const std = @import("std");
 const quic = @import("quic");

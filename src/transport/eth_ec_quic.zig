@@ -1,14 +1,12 @@
 //! QUIC transport for ethp2p-style EC broadcast (reference: `github.com/ethp2p/ethp2p` `sim/host.go`).
 //!
-//! With **`-Denable-quic`**, this links the in-repo **lsquic** stack under `vendor/lsquic_zig` (LiteSpeed lsquic + BoringSSL).
-//! Default builds omit that dependency; `listen` / `dial` then return `error.TransportNotImplemented`.
-//!
-//! Run `zig build test-quic -Denable-quic` for handshake + BCAST/SESS stream smoke tests (first build compiles BoringSSL + lsquic).
+//! Links lsquic + BoringSSL via `vendor/lsquic_zig` (always compiled — no build flag needed).
+//! Run `zig build test-quic` for handshake + BCAST/SESS stream smoke tests.
 
 const std = @import("std");
 const builtin = @import("builtin");
-const build_opts = @import("zig_ethp2p_options");
 const common = @import("eth_ec_quic_common.zig");
+const quic = @import("quic");
 
 pub const alpn_eth_ec_broadcast = common.alpn_eth_ec_broadcast;
 pub const EthEcQuicConfig = common.EthEcQuicConfig;
@@ -20,49 +18,46 @@ pub const ListenAddress = common.ListenAddress;
 /// environment variables.  Either mechanism may be used; calling `logInit` wins over the
 /// env vars when both are present because `lsquic_set_log_level` is idempotent and the last
 /// call takes effect.
-///
-/// Without `-Denable-quic` this is a no-op.
 pub fn logInit(level: []const u8) void {
-    if (comptime !build_opts.enable_quic) return;
-    @import("quic").logInit(level);
+    quic.logInit(level);
 }
 
 pub const EthEcQuicListener = struct {
-    inner: if (build_opts.enable_quic) struct {
-        ep: *@import("quic").QuicEndpoint,
-        /// Same as `ListenAddress.port` passed to `listen` (0 if you bound an ephemeral port — discovery not exposed yet).
-        port: u16,
-    } else struct {},
+    ep: *quic.QuicEndpoint,
+    /// Same as `ListenAddress.port` passed to `listen`.
+    port: u16,
     allocator: *std.mem.Allocator,
 
     pub fn deinit(self: *EthEcQuicListener) void {
-        if (comptime !build_opts.enable_quic) return;
-        const quic = @import("quic");
-        quic.endpointDeinit(self.inner.ep);
+        quic.endpointDeinit(self.ep);
     }
 
-    /// UDP port from `listen`’s `address.port` (0 when an ephemeral port was requested; devnw/quic 0.1.10 does not expose bound-port helpers on the package root).
     pub fn localPort(self: *const EthEcQuicListener) u16 {
-        if (comptime !build_opts.enable_quic) return 0;
-        return self.inner.port;
+        return self.port;
     }
 };
 
-/// Binds a QUIC listener on `address`. Caller must drive `quic.poll` on the underlying endpoint (and the peer when using `quic.streamMake` on loopback).
+/// Binds a QUIC listener on `address`. Caller must drive `quic.poll` on the underlying
+/// endpoint (and the peer when using `quic.streamMake` on loopback).
 /// `allocator` must outlive the listener until `deinit`.
-/// Errors include `error.TransportNotImplemented` without `-Denable-quic`, and `error.MissingServerIdentity` when server TLS material is absent.
+/// Returns `error.MissingServerIdentity` when server TLS material is absent.
 pub fn listen(allocator: *std.mem.Allocator, config: EthEcQuicConfig, address: ListenAddress) !EthEcQuicListener {
-    if (comptime !build_opts.enable_quic) return error.TransportNotImplemented;
     const enabled = @import("eth_ec_quic_enabled.zig");
     const ep = try enabled.listenImpl(allocator, config, address);
-    return .{ .inner = .{ .ep = ep, .port = address.port }, .allocator = allocator };
+    return .{ .ep = ep, .port = address.port, .allocator = allocator };
 }
 
-/// Dials `remote` from an ephemeral local UDP bind, completes the TLS handshake, verifies ALPN, then closes the connection.
+/// Dials `remote` from an ephemeral local UDP bind, completes the TLS handshake,
+/// verifies ALPN, then closes the connection.
 pub fn dial(allocator: *std.mem.Allocator, config: EthEcQuicConfig, remote: ListenAddress) !void {
-    if (comptime !build_opts.enable_quic) return error.TransportNotImplemented;
     const enabled = @import("eth_ec_quic_enabled.zig");
     return enabled.dialImpl(allocator, config, remote);
+}
+
+/// Drive one poll round on the listener's QUIC endpoint.
+/// `timeout_ms` is the maximum time to block waiting for I/O events.
+pub fn pollListener(listener: *EthEcQuicListener, timeout_ms: u32) !void {
+    try quic.poll(listener.ep, timeout_ms);
 }
 
 test "ALPN matches ethp2p QUIC host" {
@@ -88,7 +83,5 @@ test "UDP bind ephemeral (bootstrap for future QUIC socket)" {
 }
 
 test {
-    if (comptime build_opts.enable_quic) {
-        _ = @import("eth_ec_quic_enabled.zig");
-    }
+    _ = @import("eth_ec_quic_enabled.zig");
 }

@@ -4,9 +4,7 @@
 //! Packets are encrypted with AES-128-GCM.
 //!
 //! secp256k1 operations use the BoringSSL EC_KEY / ECDH APIs vendored via
-//! lsquic_zig.  BoringSSL is always compiled (not gated on -Denable-quic)
-//! because the discovery layer needs these primitives independently of
-//! whether the QUIC transport shim is active.
+//! lsquic_zig.  BoringSSL is always compiled alongside lsquic.
 
 const std = @import("std");
 

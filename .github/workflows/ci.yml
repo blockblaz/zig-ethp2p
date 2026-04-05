@@ -104,7 +104,7 @@ jobs:
 
       # `timeout` (coreutils) fails the step with 124 if the build or test binary never finishes.
       - name: QUIC transport tests (in-repo lsquic + BoringSSL)
-        run: timeout 40m zig build test-quic -Denable-quic --summary all
+        run: timeout 40m zig build test-quic --summary all
 
   large-network-rs:
     runs-on: ubuntu-latest
