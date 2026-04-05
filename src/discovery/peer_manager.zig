@@ -12,12 +12,16 @@
 
 const std = @import("std");
 const discv5_node = @import("discv5/node.zig");
+const discv5_table = @import("discv5/table.zig");
 const peering_table = @import("peering/table.zig");
 const warmup_mod = @import("peering/warmup.zig");
 const pool_mod = @import("peering/pool.zig");
 const ethp2p_enr = @import("enr/ethp2p.zig");
 const duty_mod = @import("peering/duty.zig");
 const eth_ec_quic = @import("../transport/eth_ec_quic.zig");
+
+/// Minimum composite peer score before a peer is evicted from the selfish table.
+const score_eviction_floor: i32 = -100;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -47,6 +51,12 @@ pub const PeerManager = struct {
     warmup: *warmup_mod.Scheduler,
     pool: *pool_mod.Pool,
 
+    /// Optional callback invoked after a peer is successfully dialed and registered.
+    /// Receives the raw context pointer, the peer's 32-byte NodeId, and the UDP address.
+    on_peer_dialed: ?*const fn (ctx: ?*anyopaque, node_id: [32]u8, addr: std.net.Address) void = null,
+    /// Opaque context pointer forwarded to `on_peer_dialed`.
+    on_peer_dialed_ctx: ?*anyopaque = null,
+
     pub fn init(
         allocator: std.mem.Allocator,
         config: PeerManagerConfig,
@@ -75,7 +85,7 @@ pub const PeerManager = struct {
         _ = self.node.poll(now_ns);
         self.scheduleWarmup(now_ns, slot_offset_ms);
         self.flushWarmup();
-        self.evictBelow(duty_mod.score_eviction_floor);
+        self.evictBelow(score_eviction_floor);
     }
 
     // -----------------------------------------------------------------------
@@ -90,7 +100,7 @@ pub const PeerManager = struct {
         self.warmup.advanceSlot(current_slot);
 
         // Query discv5 for peers with the required scheme.
-        var candidates: [duty_mod.total_selfish_slots * 2]discv5_node.table.Entry = undefined;
+        var candidates: [duty_mod.total_selfish_slots * 2]discv5_table.Entry = undefined;
         const n = self.node.queryByCapability(self.config.scheme_mask, &candidates);
 
         // Enqueue warmup for peers not already hot/warm.
@@ -133,8 +143,11 @@ pub const PeerManager = struct {
 
         eth_ec_quic.dial(&self.allocator, self.config.quic_config, remote) catch return;
 
+        // Notify the owner that a peer was dialed.
+        if (self.on_peer_dialed) |cb| cb(self.on_peer_dialed_ctx, node_id, addr);
+
         // Mark as warm in the connection pool.
-        self.pool.promoteHot(node_id, std.time.nanoTimestamp()) catch return;
+        self.pool.promoteHot(node_id, @intCast(std.time.nanoTimestamp())) catch return;
 
         // Register in the peering table.
         const eth_ec = self.node.enr_cache.get(node_id);
