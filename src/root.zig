@@ -5,6 +5,11 @@
 
 pub const wire = @import("wire/root.zig");
 
+/// Discovery layer: discv5-based peer discovery, ENR handling, duty-aware
+/// peer selection, and slot-phase-aware QUIC connection warmup.
+/// See `discovery/root.zig` for the full module map.
+pub const discovery = @import("discovery/root.zig");
+
 /// Abstract multi-hop RS scenarios aligned with ethp2p `sim/scenario_test.go` (strategy-only; no libp2p).
 /// `rs_mesh.MeshParams.partition` models link outage + heal (upstream simnet-rs CI also matches `TestNodeReconnection`, which is not implemented in Go on ethp2p `main` today).
 pub const sim = struct {
