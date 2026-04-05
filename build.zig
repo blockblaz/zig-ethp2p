@@ -1,7 +1,10 @@
 const std = @import("std");
 
-// Everything is always built: BoringSSL (libssl + libcrypto) for secp256k1 /
-// TLS, lsquic for QUIC transport, and the `quic` Zig module.
+// Everything is always built: BoringSSL (libssl + libcrypto) for lsquic's
+// TLS 1.3 QUIC handshake, and lsquic for QUIC transport.
+//
+// Discovery-layer crypto (secp256k1, ECDSA, ECDH) uses std.crypto only —
+// no BoringSSL headers are needed outside of lsquic_quic_shim.zig.
 //
 // lsquic_zig does not support Windows builds; panic early on that target.
 const LsquicBundle = struct {
@@ -51,8 +54,6 @@ fn addLsquicBundle(
 
 fn wireModule(m: *std.Build.Module, bundle: LsquicBundle) void {
     m.addImport("quic", bundle.quic_mod);
-    // BoringSSL headers for @cImport in src/discovery/discv5/crypto.zig.
-    m.addIncludePath(bundle.openssl_include);
 }
 
 fn linkLibs(
