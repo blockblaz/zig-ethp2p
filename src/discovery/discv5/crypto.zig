@@ -3,14 +3,26 @@
 //! Session keys are derived via ECDH on secp256k1 + HKDF-SHA256 (discv5 spec §6).
 //! Packets are encrypted with AES-128-GCM.
 //!
-//! secp256k1 ECDH is not in the Zig standard library.  Those operations are
-//! stubbed here with clear TODOs; everything else (AES-GCM, HKDF, SHA256)
-//! uses `std.crypto` directly.
+//! secp256k1 operations use the BoringSSL EC_KEY / ECDH APIs that are already
+//! vendored via lsquic_zig (enabled with -Denable-quic).  When the flag is
+//! absent the functions compile but return Secp256k1Error at runtime.
 
 const std = @import("std");
+const build_opts = @import("zig_ethp2p_options");
+
 const aes_gcm = std.crypto.aead.aes_gcm.Aes128Gcm;
 const hkdf = std.crypto.kdf.hkdf.HkdfSha256;
 const sha256 = std.crypto.hash.sha2.Sha256;
+const Keccak256 = std.crypto.hash.sha3.Keccak256;
+
+// secp256k1 via BoringSSL — only compiled when the quic feature flag is set
+// so the include paths are present.  Falls back to an empty namespace stub.
+const ossl = if (build_opts.enable_quic) @cImport({
+    @cInclude("openssl/bn.h");
+    @cInclude("openssl/ec_key.h");
+    @cInclude("openssl/ecdh.h");
+    @cInclude("openssl/nid.h");
+}) else struct {};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -143,9 +155,7 @@ pub fn sha256Digest(data: []const u8) [32]u8 {
 }
 
 // ---------------------------------------------------------------------------
-// secp256k1 stubs
-// (requires BoringSSL EC_KEY / ECDH — already vendored via lsquic_zig)
-// TODO: call BoringSSL EC_KEY_generate_key / ECDH_compute_key
+// secp256k1  (BoringSSL EC_KEY / ECDH)
 // ---------------------------------------------------------------------------
 
 pub const Secp256k1Error = error{
@@ -153,38 +163,104 @@ pub const Secp256k1Error = error{
     Secp256k1Error,
 };
 
-/// Placeholder: generate an ephemeral secp256k1 keypair.
-/// TODO: implement via BoringSSL `EC_KEY_generate_key`.
+/// Generate an ephemeral secp256k1 keypair.
+/// Requires -Denable-quic (BoringSSL); returns Secp256k1Error otherwise.
 pub fn generateEphemeralKeypair(
     privkey_out: *[privkey_len]u8,
     pubkey_out: *[pubkey_len]u8,
 ) Secp256k1Error!void {
-    _ = privkey_out;
-    _ = pubkey_out;
-    return error.Secp256k1Error; // Not yet implemented.
+    if (!build_opts.enable_quic) return error.Secp256k1Error;
+
+    const key = ossl.EC_KEY_new_by_curve_name(ossl.NID_secp256k1) orelse
+        return error.Secp256k1Error;
+    defer ossl.EC_KEY_free(key);
+
+    if (ossl.EC_KEY_generate_key(key) != 1) return error.Secp256k1Error;
+
+    // Private key — big-endian scalar, zero-padded to 32 bytes.
+    const privbn = ossl.EC_KEY_get0_private_key(key) orelse return error.Secp256k1Error;
+    if (ossl.BN_bn2binpad(privbn, privkey_out, privkey_len) < 0) return error.Secp256k1Error;
+
+    // Compressed public key (0x02/0x03 + 32-byte x).
+    const group = ossl.EC_KEY_get0_group(key) orelse return error.Secp256k1Error;
+    const point = ossl.EC_KEY_get0_public_key(key) orelse return error.Secp256k1Error;
+    const written = ossl.EC_POINT_point2oct(
+        group,
+        point,
+        ossl.POINT_CONVERSION_COMPRESSED,
+        pubkey_out,
+        pubkey_len,
+        null,
+    );
+    if (written != pubkey_len) return error.Secp256k1Error;
 }
 
-/// Placeholder: ECDH shared secret from local privkey and remote pubkey.
-/// TODO: implement via BoringSSL `ECDH_compute_key`.
+/// Compute the ECDH shared secret (raw x-coordinate of the product point).
+/// `local_privkey` is our 32-byte scalar; `remote_pubkey` is the 33-byte
+/// compressed public key of the peer.
 pub fn ecdhSharedSecret(
     secret_out: *[32]u8,
     local_privkey: [privkey_len]u8,
     remote_pubkey: [pubkey_len]u8,
 ) Secp256k1Error!void {
-    _ = secret_out;
-    _ = local_privkey;
-    _ = remote_pubkey;
-    return error.Secp256k1Error; // Not yet implemented.
+    if (!build_opts.enable_quic) return error.Secp256k1Error;
+
+    // Build the local EC_KEY from the raw private scalar.
+    const local_key = ossl.EC_KEY_new_by_curve_name(ossl.NID_secp256k1) orelse
+        return error.Secp256k1Error;
+    defer ossl.EC_KEY_free(local_key);
+
+    const privbn = ossl.BN_bin2bn(&local_privkey, privkey_len, null) orelse
+        return error.Secp256k1Error;
+    defer ossl.BN_free(privbn);
+
+    if (ossl.EC_KEY_set_private_key(local_key, privbn) != 1) return error.Secp256k1Error;
+
+    // Decode the remote compressed public key into an EC_POINT.
+    const group = ossl.EC_KEY_get0_group(local_key) orelse return error.Secp256k1Error;
+    const remote_point = ossl.EC_POINT_new(group) orelse return error.Secp256k1Error;
+    defer ossl.EC_POINT_free(remote_point);
+
+    if (ossl.EC_POINT_oct2point(group, remote_point, &remote_pubkey, pubkey_len, null) != 1)
+        return error.Secp256k1Error;
+
+    // ECDH — KDF=null gives us the raw x-coordinate (32 bytes for secp256k1).
+    const written = ossl.ECDH_compute_key(secret_out, 32, remote_point, local_key, null);
+    if (written != 32) return error.Secp256k1Error;
 }
 
-/// Placeholder: derive NodeId from a secp256k1 compressed pubkey.
-/// NodeId = keccak256(uncompressed_pubkey[1..]) — the keccak256 part also
-/// requires an external library (or a pure-Zig implementation).
-/// TODO: decompress pubkey via BoringSSL, then keccak256.
-pub fn nodeIdFromPubkey(pubkey: [pubkey_len]u8) [node_id_len]u8 {
-    // Fallback: sha256 of the compressed key (incorrect, only for scaffolding).
-    _ = pubkey;
-    return [_]u8{0} ** node_id_len;
+/// Derive the discv5 NodeId from a secp256k1 compressed public key.
+/// NodeId = keccak256(uncompressed_pubkey[1..])  (discv5 spec §4.1).
+pub fn nodeIdFromPubkey(pubkey: [pubkey_len]u8) Secp256k1Error![node_id_len]u8 {
+    if (!build_opts.enable_quic) return error.Secp256k1Error;
+
+    // Decompress the key to 65-byte uncompressed form (0x04 + x + y).
+    const key = ossl.EC_KEY_new_by_curve_name(ossl.NID_secp256k1) orelse
+        return error.Secp256k1Error;
+    defer ossl.EC_KEY_free(key);
+
+    const group = ossl.EC_KEY_get0_group(key) orelse return error.Secp256k1Error;
+    const point = ossl.EC_POINT_new(group) orelse return error.Secp256k1Error;
+    defer ossl.EC_POINT_free(point);
+
+    if (ossl.EC_POINT_oct2point(group, point, &pubkey, pubkey_len, null) != 1)
+        return error.Secp256k1Error;
+
+    var uncompressed: [65]u8 = undefined;
+    const written = ossl.EC_POINT_point2oct(
+        group,
+        point,
+        ossl.POINT_CONVERSION_UNCOMPRESSED,
+        &uncompressed,
+        65,
+        null,
+    );
+    if (written != 65) return error.Secp256k1Error;
+
+    // Hash the 64-byte payload (strip the 0x04 prefix).
+    var node_id: [node_id_len]u8 = undefined;
+    Keccak256.hash(uncompressed[1..], &node_id, .{});
+    return node_id;
 }
 
 // ---------------------------------------------------------------------------
@@ -221,4 +297,40 @@ test "AES-GCM rejects tampered ciphertext" {
 test "sha256Digest produces 32 bytes" {
     const d = sha256Digest("ethp2p");
     try std.testing.expectEqual(@as(usize, 32), d.len);
+}
+
+test "secp256k1 keygen and ECDH roundtrip (requires -Denable-quic)" {
+    if (!build_opts.enable_quic) return error.SkipZigTest;
+
+    var priv_a: [privkey_len]u8 = undefined;
+    var pub_a: [pubkey_len]u8 = undefined;
+    try generateEphemeralKeypair(&priv_a, &pub_a);
+
+    var priv_b: [privkey_len]u8 = undefined;
+    var pub_b: [pubkey_len]u8 = undefined;
+    try generateEphemeralKeypair(&priv_b, &pub_b);
+
+    // ECDH(a_priv, b_pub) == ECDH(b_priv, a_pub)
+    var secret_ab: [32]u8 = undefined;
+    var secret_ba: [32]u8 = undefined;
+    try ecdhSharedSecret(&secret_ab, priv_a, pub_b);
+    try ecdhSharedSecret(&secret_ba, priv_b, pub_a);
+    try std.testing.expectEqualSlices(u8, &secret_ab, &secret_ba);
+}
+
+test "nodeIdFromPubkey produces 32-byte keccak256 (requires -Denable-quic)" {
+    if (!build_opts.enable_quic) return error.SkipZigTest;
+
+    var priv: [privkey_len]u8 = undefined;
+    var pub_key: [pubkey_len]u8 = undefined;
+    try generateEphemeralKeypair(&priv, &pub_key);
+
+    const node_id = try nodeIdFromPubkey(pub_key);
+    try std.testing.expectEqual(@as(usize, 32), node_id.len);
+    // Node IDs derived from different keys must differ.
+    var priv2: [privkey_len]u8 = undefined;
+    var pub_key2: [pubkey_len]u8 = undefined;
+    try generateEphemeralKeypair(&priv2, &pub_key2);
+    const node_id2 = try nodeIdFromPubkey(pub_key2);
+    try std.testing.expect(!std.mem.eql(u8, &node_id, &node_id2));
 }

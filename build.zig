@@ -5,6 +5,9 @@ const QuicLinkBundle = struct {
     lsquic_lib: *std.Build.Step.Compile,
     ssl_lib: *std.Build.Step.Compile,
     crypto_lib: *std.Build.Step.Compile,
+    /// BoringSSL include path — exposed so that modules outside `quic`
+    /// (e.g. src/discovery/discv5/crypto.zig) can @cImport OpenSSL headers.
+    openssl_include: std.Build.LazyPath,
 };
 
 fn addLsquicQuicModule(
@@ -40,6 +43,7 @@ fn addLsquicQuicModule(
         .lsquic_lib = lsquic_pkg.artifact("lsquic"),
         .ssl_lib = boringssl_dep.artifact("ssl"),
         .crypto_lib = boringssl_dep.artifact("crypto"),
+        .openssl_include = openssl_src.path("include"),
     };
 }
 
@@ -63,10 +67,15 @@ fn linkQuicLibs(
 fn wireZigEthP2pModule(
     m: *std.Build.Module,
     zig_opts_mod: *std.Build.Module,
-    quic_mod: ?*std.Build.Module,
+    quic_bundle: ?QuicLinkBundle,
 ) void {
     m.addImport("zig_ethp2p_options", zig_opts_mod);
-    if (quic_mod) |qm| m.addImport("quic", qm);
+    if (quic_bundle) |qb| {
+        m.addImport("quic", qb.quic_mod);
+        // Expose BoringSSL headers to the root module so that
+        // src/discovery/discv5/crypto.zig can @cImport OpenSSL headers.
+        m.addIncludePath(qb.openssl_include);
+    }
 }
 
 pub fn build(b: *std.Build) void {
@@ -89,14 +98,13 @@ pub fn build(b: *std.Build) void {
         target,
         optimize,
     ) else null;
-    const quic_mod = if (quic_bundle) |qb| qb.quic_mod else null;
 
     const mod = b.addModule("zig_ethp2p", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
-    wireZigEthP2pModule(mod, zig_opts_mod, quic_mod);
+    wireZigEthP2pModule(mod, zig_opts_mod, quic_bundle);
 
     const lib = b.addLibrary(.{
         .name = "zig_ethp2p",
@@ -111,7 +119,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    wireZigEthP2pModule(lib_tests_mod, zig_opts_mod, quic_mod);
+    wireZigEthP2pModule(lib_tests_mod, zig_opts_mod, quic_bundle);
     const lib_tests = b.addTest(.{
         .root_module = lib_tests_mod,
     });
@@ -140,7 +148,6 @@ pub fn build(b: *std.Build) void {
         ci_target,
         ci_opt,
     ) else null;
-    const quic_mod_ci = if (quic_bundle_ci) |qb| qb.quic_mod else null;
 
     const broadcast_tests_mod = b.createModule(.{
         .root_source_file = b.path("src/ci_root_broadcast.zig"),
@@ -148,7 +155,7 @@ pub fn build(b: *std.Build) void {
         .optimize = ci_opt,
         .sanitize_thread = ci_tsan,
     });
-    wireZigEthP2pModule(broadcast_tests_mod, zig_opts_mod, quic_mod_ci);
+    wireZigEthP2pModule(broadcast_tests_mod, zig_opts_mod, quic_bundle_ci);
     const broadcast_tests = b.addTest(.{
         .root_module = broadcast_tests_mod,
     });
@@ -164,7 +171,7 @@ pub fn build(b: *std.Build) void {
         .optimize = ci_opt,
         .sanitize_thread = ci_tsan,
     });
-    wireZigEthP2pModule(sim_rs_tests_mod, zig_opts_mod, quic_mod_ci);
+    wireZigEthP2pModule(sim_rs_tests_mod, zig_opts_mod, quic_bundle_ci);
     const sim_rs_tests = b.addTest(.{
         .root_module = sim_rs_tests_mod,
     });
@@ -180,7 +187,7 @@ pub fn build(b: *std.Build) void {
         .optimize = ci_opt,
         .sanitize_thread = ci_tsan,
     });
-    wireZigEthP2pModule(sim_gs_tests_mod, zig_opts_mod, quic_mod_ci);
+    wireZigEthP2pModule(sim_gs_tests_mod, zig_opts_mod, quic_bundle_ci);
     const sim_gs_tests = b.addTest(.{
         .root_module = sim_gs_tests_mod,
     });
@@ -196,7 +203,7 @@ pub fn build(b: *std.Build) void {
         .optimize = ci_opt,
         .sanitize_thread = ci_tsan,
     });
-    wireZigEthP2pModule(stress_ci_mod, zig_opts_mod, quic_mod_ci);
+    wireZigEthP2pModule(stress_ci_mod, zig_opts_mod, quic_bundle_ci);
     const run_stress_ci = b.addTest(.{
         .root_module = stress_ci_mod,
     });
@@ -212,7 +219,7 @@ pub fn build(b: *std.Build) void {
         .target = ci_target,
         .optimize = ci_opt,
     });
-    wireZigEthP2pModule(quic_ci_mod, zig_opts_mod, quic_mod_ci);
+    wireZigEthP2pModule(quic_ci_mod, zig_opts_mod, quic_bundle_ci);
     const quic_ci_tests = b.addTest(.{
         .root_module = quic_ci_mod,
     });
