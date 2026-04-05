@@ -3,26 +3,24 @@
 //! Session keys are derived via ECDH on secp256k1 + HKDF-SHA256 (discv5 spec §6).
 //! Packets are encrypted with AES-128-GCM.
 //!
-//! secp256k1 operations use the BoringSSL EC_KEY / ECDH APIs that are already
-//! vendored via lsquic_zig (enabled with -Denable-quic).  When the flag is
-//! absent the functions compile but return Secp256k1Error at runtime.
+//! secp256k1 operations use the BoringSSL EC_KEY / ECDH APIs vendored via
+//! lsquic_zig.  BoringSSL is always compiled (not gated on -Denable-quic)
+//! because the discovery layer needs these primitives independently of
+//! whether the QUIC transport shim is active.
 
 const std = @import("std");
-const build_opts = @import("zig_ethp2p_options");
 
 const aes_gcm = std.crypto.aead.aes_gcm.Aes128Gcm;
 const hkdf = std.crypto.kdf.hkdf.HkdfSha256;
 const sha256 = std.crypto.hash.sha2.Sha256;
 const Keccak256 = std.crypto.hash.sha3.Keccak256;
 
-// secp256k1 via BoringSSL — only compiled when the quic feature flag is set
-// so the include paths are present.  Falls back to an empty namespace stub.
-const ossl = if (build_opts.enable_quic) @cImport({
+const ossl = @cImport({
     @cInclude("openssl/bn.h");
     @cInclude("openssl/ec_key.h");
     @cInclude("openssl/ecdh.h");
     @cInclude("openssl/nid.h");
-}) else struct {};
+});
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -164,13 +162,12 @@ pub const Secp256k1Error = error{
 };
 
 /// Generate an ephemeral secp256k1 keypair.
-/// Requires -Denable-quic (BoringSSL); returns Secp256k1Error otherwise.
+/// `privkey_out` receives the 32-byte big-endian scalar.
+/// `pubkey_out` receives the 33-byte compressed public key (0x02/0x03 + x).
 pub fn generateEphemeralKeypair(
     privkey_out: *[privkey_len]u8,
     pubkey_out: *[pubkey_len]u8,
 ) Secp256k1Error!void {
-    if (!build_opts.enable_quic) return error.Secp256k1Error;
-
     const key = ossl.EC_KEY_new_by_curve_name(ossl.NID_secp256k1) orelse
         return error.Secp256k1Error;
     defer ossl.EC_KEY_free(key);
@@ -203,8 +200,6 @@ pub fn ecdhSharedSecret(
     local_privkey: [privkey_len]u8,
     remote_pubkey: [pubkey_len]u8,
 ) Secp256k1Error!void {
-    if (!build_opts.enable_quic) return error.Secp256k1Error;
-
     // Build the local EC_KEY from the raw private scalar.
     const local_key = ossl.EC_KEY_new_by_curve_name(ossl.NID_secp256k1) orelse
         return error.Secp256k1Error;
@@ -232,8 +227,6 @@ pub fn ecdhSharedSecret(
 /// Derive the discv5 NodeId from a secp256k1 compressed public key.
 /// NodeId = keccak256(uncompressed_pubkey[1..])  (discv5 spec §4.1).
 pub fn nodeIdFromPubkey(pubkey: [pubkey_len]u8) Secp256k1Error![node_id_len]u8 {
-    if (!build_opts.enable_quic) return error.Secp256k1Error;
-
     // Decompress the key to 65-byte uncompressed form (0x04 + x + y).
     const key = ossl.EC_KEY_new_by_curve_name(ossl.NID_secp256k1) orelse
         return error.Secp256k1Error;
@@ -299,9 +292,7 @@ test "sha256Digest produces 32 bytes" {
     try std.testing.expectEqual(@as(usize, 32), d.len);
 }
 
-test "secp256k1 keygen and ECDH roundtrip (requires -Denable-quic)" {
-    if (!build_opts.enable_quic) return error.SkipZigTest;
-
+test "secp256k1 keygen and ECDH roundtrip" {
     var priv_a: [privkey_len]u8 = undefined;
     var pub_a: [pubkey_len]u8 = undefined;
     try generateEphemeralKeypair(&priv_a, &pub_a);
@@ -310,7 +301,7 @@ test "secp256k1 keygen and ECDH roundtrip (requires -Denable-quic)" {
     var pub_b: [pubkey_len]u8 = undefined;
     try generateEphemeralKeypair(&priv_b, &pub_b);
 
-    // ECDH(a_priv, b_pub) == ECDH(b_priv, a_pub)
+    // ECDH(a_priv, b_pub) must equal ECDH(b_priv, a_pub).
     var secret_ab: [32]u8 = undefined;
     var secret_ba: [32]u8 = undefined;
     try ecdhSharedSecret(&secret_ab, priv_a, pub_b);
@@ -318,15 +309,14 @@ test "secp256k1 keygen and ECDH roundtrip (requires -Denable-quic)" {
     try std.testing.expectEqualSlices(u8, &secret_ab, &secret_ba);
 }
 
-test "nodeIdFromPubkey produces 32-byte keccak256 (requires -Denable-quic)" {
-    if (!build_opts.enable_quic) return error.SkipZigTest;
-
+test "nodeIdFromPubkey produces 32-byte keccak256" {
     var priv: [privkey_len]u8 = undefined;
     var pub_key: [pubkey_len]u8 = undefined;
     try generateEphemeralKeypair(&priv, &pub_key);
 
     const node_id = try nodeIdFromPubkey(pub_key);
     try std.testing.expectEqual(@as(usize, 32), node_id.len);
+
     // Node IDs derived from different keys must differ.
     var priv2: [privkey_len]u8 = undefined;
     var pub_key2: [pubkey_len]u8 = undefined;
