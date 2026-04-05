@@ -9,6 +9,7 @@
 //! Cryptographic verification is delegated to `discv5/crypto.zig`.
 
 const std = @import("std");
+const crypto = @import("../discv5/crypto.zig");
 
 pub const EnrError = error{
     /// RLP item is malformed or truncated.
@@ -21,6 +22,10 @@ pub const EnrError = error{
     MissingKey,
     /// Unsupported identity scheme.
     UnknownIdentity,
+    /// Signature verification failed.
+    BadSignature,
+    /// Memory allocation failed.
+    OutOfMemory,
 };
 
 /// Maximum serialised ENR size (EIP-778 §4).
@@ -71,40 +76,45 @@ pub const KvPair = struct {
 // Minimal RLP codec (subset needed for ENR)
 // ---------------------------------------------------------------------------
 
-/// Decode the leading RLP item from `buf`, return it and the remaining bytes.
+/// Decode the leading RLP item from `buf`, return the **full** item (including
+/// its length prefix) and the remaining bytes.
+///
+/// This is consistent across all types — strings, lists, and single bytes all
+/// include the prefix in `item`.  Pass `item` directly to `rlpStringValue` or
+/// `rlpListPayload` to strip the prefix and get the payload.
 pub fn rlpDecode(buf: []const u8) EnrError!struct { item: []const u8, rest: []const u8 } {
     if (buf.len == 0) return error.BadRlp;
     const first = buf[0];
 
     if (first < 0x80) {
-        // Single byte.
+        // Single byte — the byte itself is both prefix and content.
         return .{ .item = buf[0..1], .rest = buf[1..] };
     }
 
     if (first < 0xb8) {
-        // Short string (0-55 bytes).
+        // Short string (0–55 bytes) — include the 0x80-range prefix byte.
         const len: usize = first - 0x80;
         if (buf.len < 1 + len) return error.BadRlp;
-        return .{ .item = buf[1 .. 1 + len], .rest = buf[1 + len ..] };
+        return .{ .item = buf[0 .. 1 + len], .rest = buf[1 + len ..] };
     }
 
     if (first < 0xc0) {
-        // Long string.
+        // Long string — include prefix + length bytes.
         const len_bytes: usize = first - 0xb7;
         if (buf.len < 1 + len_bytes) return error.BadRlp;
         const len = rlpReadBigEndian(buf[1 .. 1 + len_bytes]) catch return error.BadRlp;
         if (buf.len < 1 + len_bytes + len) return error.BadRlp;
-        return .{ .item = buf[1 + len_bytes .. 1 + len_bytes + len], .rest = buf[1 + len_bytes + len ..] };
+        return .{ .item = buf[0 .. 1 + len_bytes + len], .rest = buf[1 + len_bytes + len ..] };
     }
 
     if (first < 0xf8) {
-        // Short list — return entire list payload including prefix.
+        // Short list — include the 0xc0-range prefix byte.
         const len: usize = first - 0xc0;
         if (buf.len < 1 + len) return error.BadRlp;
         return .{ .item = buf[0 .. 1 + len], .rest = buf[1 + len ..] };
     }
 
-    // Long list.
+    // Long list — include prefix + length bytes.
     const len_bytes: usize = first - 0xf7;
     if (buf.len < 1 + len_bytes) return error.BadRlp;
     const len = rlpReadBigEndian(buf[1 .. 1 + len_bytes]) catch return error.BadRlp;
@@ -261,6 +271,162 @@ pub fn decode(allocator: std.mem.Allocator, raw: []const u8) (EnrError || std.me
 }
 
 // ---------------------------------------------------------------------------
+// RLP integer encoding (variable-length big-endian, no leading zeros)
+// ---------------------------------------------------------------------------
+
+/// Encode a u64 as an RLP integer (0x80 for zero, or big-endian bytes).
+pub fn rlpEncodeUint64(allocator: std.mem.Allocator, v: u64) std.mem.Allocator.Error![]u8 {
+    if (v == 0) {
+        const out = try allocator.alloc(u8, 1);
+        out[0] = 0x80; // RLP empty string = zero integer
+        return out;
+    }
+    // Minimal big-endian bytes.
+    var buf: [8]u8 = undefined;
+    var len: usize = 0;
+    var x = v;
+    while (x > 0) : (x >>= 8) {
+        buf[7 - len] = @truncate(x & 0xff);
+        len += 1;
+    }
+    const bytes = buf[8 - len ..];
+    return rlpEncodeString(allocator, bytes);
+}
+
+/// Wrap a slice of pre-encoded RLP items in an RLP list prefix.
+pub fn rlpEncodeList(allocator: std.mem.Allocator, items: []const []const u8) std.mem.Allocator.Error![]u8 {
+    var payload_len: usize = 0;
+    for (items) |it| payload_len += it.len;
+
+    var out = std.ArrayListUnmanaged(u8){};
+    defer out.deinit(allocator);
+
+    if (payload_len <= 55) {
+        try out.append(allocator, @intCast(0xc0 + payload_len));
+    } else {
+        const len_bytes = bigEndianLen(payload_len);
+        try out.append(allocator, @intCast(0xf7 + len_bytes));
+        var tmp: [8]u8 = undefined;
+        writeBigEndian(tmp[8 - len_bytes ..], payload_len);
+        try out.appendSlice(allocator, tmp[8 - len_bytes ..]);
+    }
+    for (items) |it| try out.appendSlice(allocator, it);
+    return out.toOwnedSlice(allocator);
+}
+
+// ---------------------------------------------------------------------------
+// ENR encode + sign  (EIP-778 §4, v4 identity scheme)
+// ---------------------------------------------------------------------------
+
+/// Builder for assembling a signed ENR.
+///
+/// Pairs must be added in lexicographic key order (the caller is responsible
+/// for ordering). Call `sign()` to produce the final wire-encoded record.
+pub const EnrBuilder = struct {
+    allocator: std.mem.Allocator,
+    seq: Seq,
+    pairs: std.ArrayListUnmanaged(KvPair) = .{},
+
+    pub fn init(allocator: std.mem.Allocator, seq: Seq) EnrBuilder {
+        return .{ .allocator = allocator, .seq = seq };
+    }
+
+    pub fn deinit(self: *EnrBuilder) void {
+        for (self.pairs.items) |*kv| {
+            self.allocator.free(kv.key);
+            self.allocator.free(kv.value_raw);
+        }
+        self.pairs.deinit(self.allocator);
+    }
+
+    /// Add a key-value pair. `key` is the plain string; `value_raw` is
+    /// already RLP-encoded (e.g. from `rlpEncodeString`).
+    pub fn addRaw(
+        self: *EnrBuilder,
+        key: []const u8,
+        value_raw: []const u8,
+    ) std.mem.Allocator.Error!void {
+        const k = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(k);
+        const v = try self.allocator.dupe(u8, value_raw);
+        try self.pairs.append(self.allocator, .{ .key = k, .value_raw = v });
+    }
+
+    /// Build the RLP content (without the signature) for signing.
+    /// Returns allocated bytes; caller must free.
+    pub fn buildContent(self: *const EnrBuilder) std.mem.Allocator.Error![]u8 {
+        var items = std.ArrayListUnmanaged([]u8){};
+        defer {
+            for (items.items) |it| self.allocator.free(it);
+            items.deinit(self.allocator);
+        }
+
+        try items.append(self.allocator, try rlpEncodeUint64(self.allocator, self.seq));
+        for (self.pairs.items) |kv| {
+            try items.append(self.allocator, try rlpEncodeString(self.allocator, kv.key));
+            try items.append(self.allocator, try self.allocator.dupe(u8, kv.value_raw));
+        }
+        return rlpEncodeList(self.allocator, @ptrCast(items.items));
+    }
+
+    /// Sign the record and return the complete RLP-encoded ENR wire bytes.
+    /// The result includes: [signature, seq, k, v, ...].
+    /// Returns error.RecordTooLarge if the encoded size exceeds 300 bytes.
+    pub fn sign(
+        self: *const EnrBuilder,
+        privkey: [crypto.privkey_len]u8,
+    ) (std.mem.Allocator.Error || EnrError || crypto.Secp256k1Error)![]u8 {
+        const content = try self.buildContent();
+        defer self.allocator.free(content);
+
+        var sig: [crypto.ecdsa_sig_len]u8 = undefined;
+        try crypto.ecdsaSign(&sig, content, privkey);
+
+        var items = std.ArrayListUnmanaged([]u8){};
+        defer {
+            for (items.items) |it| self.allocator.free(it);
+            items.deinit(self.allocator);
+        }
+
+        try items.append(self.allocator, try rlpEncodeString(self.allocator, &sig));
+        try items.append(self.allocator, try rlpEncodeUint64(self.allocator, self.seq));
+        for (self.pairs.items) |kv| {
+            try items.append(self.allocator, try rlpEncodeString(self.allocator, kv.key));
+            try items.append(self.allocator, try self.allocator.dupe(u8, kv.value_raw));
+        }
+
+        const record = try rlpEncodeList(self.allocator, @ptrCast(items.items));
+        if (record.len > max_record_bytes) {
+            self.allocator.free(record);
+            return error.RecordTooLarge;
+        }
+        return record;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// ENR signature verification  (v4 identity scheme)
+// ---------------------------------------------------------------------------
+
+/// Verify the v4 identity signature of a decoded ENR.
+/// `pubkey` is the 33-byte compressed secp256k1 key from the "secp256k1" field.
+pub fn verifyV4(enr: *const Enr, pubkey: [crypto.pubkey_len]u8) (EnrError || crypto.Secp256k1Error)!void {
+    if (enr.signature.len != crypto.ecdsa_sig_len) return error.BadSignature;
+
+    // Rebuild the content RLP (seq + kv pairs, no signature).
+    var builder = EnrBuilder.init(enr.allocator, enr.seq);
+    defer builder.deinit();
+    for (enr.pairs) |kv| {
+        try builder.addRaw(kv.key, kv.value_raw);
+    }
+    const content = builder.buildContent() catch return error.OutOfMemory;
+    defer enr.allocator.free(content);
+
+    const sig_bytes: [crypto.ecdsa_sig_len]u8 = enr.signature[0..crypto.ecdsa_sig_len].*;
+    try crypto.ecdsaVerify(sig_bytes, content, pubkey);
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -285,4 +451,45 @@ test "rlpListPayload strips list prefix" {
     const list = &[_]u8{ 0xc3, 0x82, 'a', 'b' }; // list(2+1=3), string("ab")
     const payload = try rlpListPayload(list);
     try std.testing.expectEqual(@as(usize, 3), payload.len);
+}
+
+test "rlpEncodeUint64 roundtrip" {
+    const gpa = std.testing.allocator;
+    const cases = [_]u64{ 0, 1, 127, 128, 255, 256, 0xffffffff };
+    for (cases) |v| {
+        const enc = try rlpEncodeUint64(gpa, v);
+        defer gpa.free(enc);
+        const item = try rlpDecode(enc);
+        const bytes = try rlpStringValue(item.item);
+        var decoded: u64 = 0;
+        for (bytes) |b| decoded = (decoded << 8) | b;
+        try std.testing.expectEqual(v, decoded);
+    }
+}
+
+test "ENR sign and verify roundtrip" {
+    const gpa = std.testing.allocator;
+
+    var privkey: [crypto.privkey_len]u8 = undefined;
+    var pubkey: [crypto.pubkey_len]u8 = undefined;
+    try crypto.generateEphemeralKeypair(&privkey, &pubkey);
+
+    var builder = EnrBuilder.init(gpa, 1);
+    defer builder.deinit();
+
+    const id_val = try rlpEncodeString(gpa, "v4");
+    defer gpa.free(id_val);
+    try builder.addRaw("id", id_val);
+
+    const pk_val = try rlpEncodeString(gpa, &pubkey);
+    defer gpa.free(pk_val);
+    try builder.addRaw("secp256k1", pk_val);
+
+    const wire = try builder.sign(privkey);
+    defer gpa.free(wire);
+
+    var enr_rec = try decode(gpa, wire);
+    defer enr_rec.deinit();
+
+    try verifyV4(&enr_rec, pubkey);
 }

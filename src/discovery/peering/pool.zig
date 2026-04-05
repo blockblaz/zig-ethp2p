@@ -43,6 +43,9 @@ pub const Pool = struct {
     /// Promote a peer to `hot` (session just established).
     pub fn promoteHot(self: *Pool, node_id: NodeId, now_ns: u64) std.mem.Allocator.Error!void {
         const gop = try self.entries.getOrPut(self.allocator, node_id);
+        if (gop.found_existing) {
+            if (gop.value_ptr.session_ticket) |t| self.allocator.free(t);
+        }
         gop.value_ptr.* = .{ .node_id = node_id, .warmth = .hot, .promoted_ns = now_ns };
     }
 

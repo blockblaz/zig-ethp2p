@@ -80,14 +80,14 @@ pub const Score = struct {
     }
 
     pub fn recordSuccess(self: *Score, now_ns: u64) void {
-        self.behavioral = @min(score_ceiling, self.behavioral + 1);
-        self.reliability = @min(255, self.reliability + 1);
+        self.behavioral = @intCast(@min(score_ceiling, @as(i32, self.behavioral) + 1));
+        self.reliability = self.reliability +| 1;
         self.updated_ns = now_ns;
         self.recompute();
     }
 
     pub fn recordFailure(self: *Score, now_ns: u64) void {
-        self.behavioral = @max(score_floor, self.behavioral - 5);
+        self.behavioral = @intCast(@max(score_floor, @as(i32, self.behavioral) - 5));
         self.reliability = self.reliability -| 3;
         self.updated_ns = now_ns;
         self.recompute();
@@ -117,11 +117,11 @@ pub const Score = struct {
             -200
         else blk: {
             const r: i32 = @intCast(self.rtt_ms);
-            break :blk -@min(500, r / 2);
+            break :blk -@min(500, @divTrunc(r, 2));
         };
 
         // Reliability component: 0 for 50% (128/255), ±100 for extremes.
-        const rel: i32 = (@as(i32, self.reliability) - 128) * 100 / 128;
+        const rel: i32 = @divTrunc((@as(i32, self.reliability) - 128) * 100, 128);
 
         // Behavioral component (already bounded).
         const beh: i32 = self.behavioral;

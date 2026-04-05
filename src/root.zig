@@ -74,4 +74,5 @@ test {
     _ = broadcast.observer;
     _ = broadcast.gossip;
     _ = broadcast.relay_async_verify;
+    _ = discovery;
 }

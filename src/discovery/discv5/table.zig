@@ -105,7 +105,7 @@ pub const RoutingTable = struct {
         // Find the highest set bit in d (big-endian).
         for (d, 0..) |byte, i| {
             if (byte != 0) {
-                const bit: usize = 7 - @ctz(std.math.reverseBytes(byte));
+                const bit: usize = 7 - @ctz(@bitReverse(byte));
                 return (31 - i) * 8 + bit;
             }
         }
@@ -157,6 +157,28 @@ pub const RoutingTable = struct {
         var n: usize = 0;
         for (&self.buckets) |*b| n += b.len;
         return n;
+    }
+
+    /// Look up a specific node by ID.  Returns null if not in the table.
+    pub fn getEntry(self: *const RoutingTable, node_id: NodeId) ?Entry {
+        const idx = bucketIndex(self.local_id, node_id) orelse return null;
+        const b = &self.buckets[idx];
+        for (b.entries[0..b.len]) |e| {
+            if (std.mem.eql(u8, &e.node_id, &node_id)) return e;
+        }
+        return null;
+    }
+
+    /// Update `last_seen_ns` for an existing entry (no-op if not found).
+    pub fn refreshNode(self: *RoutingTable, node_id: NodeId, now_ns: u64) void {
+        const idx = bucketIndex(self.local_id, node_id) orelse return;
+        const b = &self.buckets[idx];
+        for (b.entries[0..b.len]) |*e| {
+            if (std.mem.eql(u8, &e.node_id, &node_id)) {
+                e.last_seen_ns = now_ns;
+                return;
+            }
+        }
     }
 };
 

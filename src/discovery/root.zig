@@ -12,8 +12,8 @@
 //!
 //!   discv5/
 //!     table.zig     256-bucket Kademlia routing table (k=16)
-//!     crypto.zig    AES-128-GCM, HKDF-SHA256, secp256k1 stubs
-//!     packet.zig    Ordinary / WHOAREYOU packet wire types
+//!     crypto.zig    AES-128-GCM, HKDF-SHA256, secp256k1 (std.crypto)
+//!     packet.zig    Ordinary / WHOAREYOU / Handshake packet codec
 //!     session.zig   Per-peer session key state
 //!     protocol.zig  PING / PONG / FINDNODE / NODES / TALKREQ / TALKRES
 //!     node.zig      Drive loop, bootstrap, capability query
@@ -41,6 +41,7 @@ pub const peering_duty = @import("peering/duty.zig");
 pub const peering_table = @import("peering/table.zig");
 pub const peering_pool = @import("peering/pool.zig");
 pub const peering_warmup = @import("peering/warmup.zig");
+pub const peer_manager = @import("peer_manager.zig");
 
 // Convenience re-exports.
 pub const RoutingTable = discv5_table.RoutingTable;
@@ -69,4 +70,5 @@ test {
     _ = @import("peering/table.zig");
     _ = @import("peering/pool.zig");
     _ = @import("peering/warmup.zig");
+    _ = @import("peer_manager.zig");
 }
