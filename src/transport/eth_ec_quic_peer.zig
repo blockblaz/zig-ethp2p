@@ -4,9 +4,9 @@
 //! in the Go reference without goroutines.  Callers drive progress by calling
 //! `poll` on the underlying `QuicEndpoint` then calling `drive()` on this struct.
 //!
-//! **Sketch only** — not wired to an Engine or channel table yet.  Demonstrates
-//! that the symmetric BCAST handshake and `runAcceptLoop` pattern are achievable
-//! in a single-threaded, poll-driven Zig context.
+//! SESS/CHUNK inbound streams can be forwarded into `broadcast.Engine` via
+//! `broadcast/engine_quic.zig` (`EngineQuicHost`).  Callbacks receive an optional
+//! `user_data` pointer for embedder context.
 
 const std = @import("std");
 const quic = @import("quic");
@@ -45,10 +45,13 @@ pub const PeerConn = struct {
 
     allocator: std.mem.Allocator,
 
-    /// Optional callback for inbound SESS streams.  Set by the owning Engine.
-    on_sess_stream: ?*const fn (self: *PeerConn, st: *quic.QuicStream) void = null,
-    /// Optional callback for inbound CHUNK streams.  Set by the owning Engine.
-    on_chunk_stream: ?*const fn (self: *PeerConn, st: *quic.QuicStream) void = null,
+    /// Opaque context passed to stream callbacks (e.g. `*EngineQuicHost`).
+    user_data: ?*anyopaque = null,
+
+    /// Optional callback for inbound SESS streams.
+    on_sess_stream: ?*const fn (user_data: ?*anyopaque, pc: *PeerConn, st: *quic.QuicStream) void = null,
+    /// Optional callback for inbound CHUNK streams.
+    on_chunk_stream: ?*const fn (user_data: ?*anyopaque, pc: *PeerConn, st: *quic.QuicStream) void = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -149,10 +152,10 @@ pub const PeerConn = struct {
                 if (self.bcast_in == null) self.bcast_in = st;
             },
             .sess => {
-                if (self.on_sess_stream) |cb| cb(self, st) else quic.streamCancelRead(st);
+                if (self.on_sess_stream) |cb| cb(self.user_data, self, st) else quic.streamCancelRead(st);
             },
             .chunk => {
-                if (self.on_chunk_stream) |cb| cb(self, st) else quic.streamCancelRead(st);
+                if (self.on_chunk_stream) |cb| cb(self.user_data, self, st) else quic.streamCancelRead(st);
             },
             else => {
                 // Unknown protocol — cancel to release flow-control credit.

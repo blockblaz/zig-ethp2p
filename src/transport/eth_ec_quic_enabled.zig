@@ -7,6 +7,13 @@ const test_certs = @import("eth_ec_quic_test_certs.zig");
 const bcast_stream = @import("../wire/bcast_stream.zig");
 const sess_stream = @import("../wire/sess_stream.zig");
 const protocol = @import("../wire/protocol.zig");
+const chunk_stream = @import("../wire/chunk_stream.zig");
+const wire_rs = @import("../wire/rs.zig");
+const Engine = @import("../broadcast/engine.zig").Engine;
+const engine_quic = @import("../broadcast/engine_quic.zig");
+const peer_mod = @import("eth_ec_quic_peer.zig");
+const rs_init = @import("../layer/rs_init.zig");
+const rs_strategy = @import("../layer/rs_strategy.zig");
 
 fn acceptIncomingQuicStream(
     conn: *quic.QuicConnection,
@@ -384,6 +391,211 @@ test "QUIC UNI streams: symmetric BCAST handshake + SESS session_open (wire fram
         },
         else => unreachable,
     }
+
+    quic.destroy(srv, sc);
+    quic.destroy(client_ep, conn);
+}
+
+// EngineQuicHost: inbound SESS/CHUNK into Engine / ChannelRs (issue #37).
+test "QUIC EngineQuicHost SESS session_open + CHUNK relay ingest" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    if (@import("builtin").os.tag == .wasi) return error.SkipZigTest;
+
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var alloc = gpa.allocator();
+
+    const srv_cfg = common.EthEcQuicConfig{
+        .server_certificate_pem_path = "src/transport/testdata/zethp2p_cert.pem",
+        .server_private_key_pem_path = "src/transport/testdata/zethp2p_key.pem",
+        .tls_insecure_skip_verify = true,
+    };
+    var alpn_srv = [_][]const u8{common.alpn_eth_ec_broadcast};
+    var qc_srv = toQuicConfig(srv_cfg, &alpn_srv);
+    var server_ep: ?*quic.QuicEndpoint = null;
+    var sport: u16 = 0;
+    for (0..64) |i| {
+        const p: u16 = @intCast(45300 + i);
+        const bind_s = try std.fmt.allocPrint(alloc, "127.0.0.1:{d}", .{p});
+        defer alloc.free(bind_s);
+        server_ep = quic.endpointInit(&alloc, bind_s, &qc_srv) catch |err| switch (err) {
+            error.AddressInUse, error.AddressNotAvailable => continue,
+            else => |e| return e,
+        };
+        sport = p;
+        break;
+    }
+    const srv = server_ep orelse return error.NoBindPort;
+    defer quic.endpointDeinit(srv);
+
+    var alpn_cli = [_][]const u8{common.alpn_eth_ec_broadcast};
+    var qc_cli = quic.QuicConfig{
+        .alpn = &alpn_cli,
+        .allow_insecure = true,
+        .max_idle_timeout_ms = maxIdleTimeoutMs(common.EthEcQuicConfig.default().max_idle_timeout_ns),
+        .max_udp_payload = 1350,
+    };
+    const client_ep = try quic.endpointInit(&alloc, "127.0.0.1:0", &qc_cli);
+    defer quic.endpointDeinit(client_ep);
+
+    const remote_s = try std.fmt.allocPrint(alloc, "127.0.0.1:{d}", .{sport});
+    defer alloc.free(remote_s);
+
+    const conn = try quic.connect(client_ep, remote_s, test_certs.tls_server_name);
+    errdefer quic.destroy(client_ep, conn);
+
+    var server_conn: ?*quic.QuicConnection = null;
+    var rounds: u32 = 0;
+    while (rounds < 30_000) : (rounds += 1) {
+        try quic.poll(srv, 0);
+        try quic.poll(client_ep, 0);
+        if (server_conn == null) server_conn = quic.tryAccept(srv);
+        if (quic.handshakeComplete(conn)) {
+            if (server_conn) |c| {
+                if (quic.handshakeComplete(c)) break;
+            }
+        }
+    }
+    const sc = server_conn orelse return error.MissingServerConnection;
+    try std.testing.expect(quic.handshakeComplete(conn));
+    try std.testing.expect(quic.handshakeComplete(sc));
+
+    const cfg = rs_init.RsConfig{
+        .data_shards = 4,
+        .parity_shards = 2,
+        .chunk_len = 0,
+        .bitmap_threshold = 0,
+        .forward_multiplier = 4,
+        .disable_bitmap = false,
+    };
+
+    var engine = try Engine.init(alloc, "server-local", .{});
+    defer engine.deinit();
+
+    const ch = try engine.attachChannelRs("ch1", cfg);
+    try ch.addMember("client-peer");
+
+    var host = engine_quic.EngineQuicHost.init(alloc, &engine, sc, srv);
+    defer host.deinit();
+    host.wireEngine();
+    host.setPeerEndpoint(client_ep);
+
+    var cli_pc = peer_mod.PeerConn.init(alloc, conn, client_ep);
+
+    try host.peer.beginHandshake(client_ep, .{
+        .version = 1,
+        .channels = &.{"ch1"},
+        .peer_id = "server-peer",
+    });
+    try cli_pc.beginHandshake(srv, .{
+        .version = 1,
+        .channels = &.{"ch1"},
+        .peer_id = "client-peer",
+    });
+
+    var srv_bcast_payload = std.ArrayList(u8).empty;
+    defer srv_bcast_payload.deinit(alloc);
+    {
+        const w = srv_bcast_payload.writer(alloc);
+        try bcast_stream.writeBcastHandshakeOpen(w, alloc, .{
+            .version = 1,
+            .channels = &.{"ch1"},
+            .peer_id = "server-peer",
+        });
+    }
+    try quic.streamQueueWrite(host.peer.bcast_out.?, srv_bcast_payload.items);
+    try quic.streamDrainWrites(host.peer.bcast_out.?, client_ep, 10_000);
+
+    var cli_bcast_payload = std.ArrayList(u8).empty;
+    defer cli_bcast_payload.deinit(alloc);
+    {
+        const w = cli_bcast_payload.writer(alloc);
+        try bcast_stream.writeBcastHandshakeOpen(w, alloc, .{
+            .version = 1,
+            .channels = &.{"ch1"},
+            .peer_id = "client-peer",
+        });
+    }
+    try quic.streamQueueWrite(cli_pc.bcast_out.?, cli_bcast_payload.items);
+    try quic.streamDrainWrites(cli_pc.bcast_out.?, srv, 10_000);
+
+    rounds = 0;
+    while (rounds < 30_000) : (rounds += 1) {
+        try quic.poll(srv, 0);
+        try quic.poll(client_ep, 0);
+        _ = host.peer.drive();
+        _ = cli_pc.drive();
+        if (host.peer.state == .active and cli_pc.state == .active) break;
+    }
+    try std.testing.expectEqual(peer_mod.PeerConnState.active, host.peer.state);
+    try std.testing.expectEqual(peer_mod.PeerConnState.active, cli_pc.state);
+
+    try host.finishBcastHandshakeRead();
+    try std.testing.expectEqualStrings("client-peer", host.remote_peer_id);
+
+    const payload = [_]u8{ 9, 8, 7, 6, 5 };
+    var origin = try rs_strategy.RsStrategy.newOrigin(alloc, cfg, &payload);
+    defer origin.deinit();
+
+    const hash_slices = try alloc.alloc([]const u8, origin.preamble.chunk_hashes.len);
+    defer alloc.free(hash_slices);
+    for (origin.preamble.chunk_hashes, 0..) |row, i| {
+        hash_slices[i] = row;
+    }
+    const pre_bytes = try wire_rs.encodePreamble(alloc, .{
+        .num_data = origin.preamble.data_chunks,
+        .num_parity = origin.preamble.parity_chunks,
+        .length = origin.preamble.message_length,
+        .hashes = hash_slices,
+        .hash = &origin.preamble.message_hash,
+    });
+    defer alloc.free(pre_bytes);
+
+    const cli_sess = try quic.streamMakeUni(conn, srv);
+    var sess_pl = std.ArrayList(u8).empty;
+    defer sess_pl.deinit(alloc);
+    {
+        const w = sess_pl.writer(alloc);
+        try sess_stream.writeSessSessionOpen(w, alloc, .{
+            .channel = "ch1",
+            .message_id = "m1",
+            .preamble = pre_bytes,
+            .initial_update = &.{},
+        });
+    }
+    try quic.streamQueueWrite(cli_sess, sess_pl.items);
+    try quic.streamDrainWrites(cli_sess, srv, 10_000);
+
+    rounds = 0;
+    while (rounds < 20_000) : (rounds += 1) {
+        try quic.poll(srv, 0);
+        try quic.poll(client_ep, 0);
+        _ = host.peer.drive();
+        if (ch.sessionStrategy("m1") != null) break;
+    }
+    try std.testing.expect(ch.sessionStrategy("m1") != null);
+
+    const cli_chunk = try quic.streamMakeUni(conn, srv);
+    var chunk_pl = std.ArrayList(u8).empty;
+    defer chunk_pl.deinit(alloc);
+    {
+        const w = chunk_pl.writer(alloc);
+        try chunk_stream.writeRsShardChunk(w, alloc, "ch1", "m1", 0, origin.chunks[0]);
+    }
+    try quic.streamQueueWrite(cli_chunk, chunk_pl.items);
+    try quic.streamDrainWrites(cli_chunk, srv, 10_000);
+
+    rounds = 0;
+    while (rounds < 20_000) : (rounds += 1) {
+        try quic.poll(srv, 0);
+        try quic.poll(client_ep, 0);
+        _ = host.peer.drive();
+        const st = ch.sessionStrategy("m1") orelse break;
+        if (st.progress().have > 0) break;
+    }
+
+    const st_final = ch.sessionStrategy("m1") orelse return error.MissingSession;
+    try std.testing.expect(st_final.progress().have > 0);
 
     quic.destroy(srv, sc);
     quic.destroy(client_ep, conn);

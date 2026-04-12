@@ -41,12 +41,14 @@ pub const layer = struct {
 /// QUIC listen/dial — see `transport/eth_ec_quic.zig` and README; mapping streams to `wire.*` is issue **#27**.
 pub const transport = struct {
     pub const eth_ec_quic = @import("transport/eth_ec_quic.zig");
+    pub const eth_ec_quic_peer = @import("transport/eth_ec_quic_peer.zig");
     pub const shared_udp_socket = @import("transport/shared_udp_socket.zig");
 };
 
 pub const broadcast = struct {
     pub const observer = @import("broadcast/observer.zig");
     pub const engine = @import("broadcast/engine.zig");
+    pub const engine_quic = @import("broadcast/engine_quic.zig");
     pub const channel_rs = @import("broadcast/channel_rs.zig");
     pub const session_rs = @import("broadcast/session_rs.zig");
     pub const gossip = @import("broadcast/gossip.zig");
@@ -75,5 +77,6 @@ test {
     _ = broadcast.observer;
     _ = broadcast.gossip;
     _ = broadcast.relay_async_verify;
+    _ = broadcast.engine_quic;
     _ = discovery;
 }

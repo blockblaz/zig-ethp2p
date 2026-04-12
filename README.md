@@ -39,7 +39,7 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | `PartialMessagesExtension` (nested in `RPC.partial`) | libp2p `rpc.proto` field 10 body | `encodePartialMessagesExtension`, `decodePartialMessagesExtensionOwned` |
 | Unsigned-varint length prefix before `RPC` body | common libp2p framing | `encodeRpcLengthPrefixed`, `decodeRpcLengthPrefixedPrefix` |
 | In-process duplex for length-prefixed `RPC` (simnet-style, no TCP/QUIC) | pair of `Endpoint`s over bounded byte queues | `sim.gossipsub_rpc_host` (`Link`, `Endpoint.sendRpc` / `recvRpcOwned`) |
-| QUIC transport + UNI stream alignment | [`sim/host.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/host.go), `peer.go`, `peer_ctrl.go`, `peer_in.go` | `transport.eth_ec_quic`: IETF QUIC, TLS 1.3, ALPN `eth-ec-broadcast`, **unidirectional** BCAST/SESS/CHUNK streams matching `OpenUniStream`/`AcceptUniStream`; `PeerConn` lifecycle sketch. See [QUIC transport](#quic-transport-lsquic-build). |
+| QUIC transport + UNI stream alignment | [`sim/host.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/host.go), `peer.go`, `peer_ctrl.go`, `peer_in.go` | `transport.eth_ec_quic`: IETF QUIC, TLS 1.3, ALPN `eth-ec-broadcast`, **unidirectional** BCAST/SESS/CHUNK streams matching `OpenUniStream`/`AcceptUniStream`; `PeerConn` + `broadcast.engine_quic` (`EngineQuicHost`) wire inbound SESS/CHUNK into `Engine` / `ChannelRs`. See [QUIC transport](#quic-transport-lsquic-build). |
 | **Still open** | — | [Pending work](#pending-work) |
 
 ## Scope on `main` (at a glance)
@@ -52,7 +52,7 @@ This is **what is already implemented** — not the backlog. Per-module mapping 
 - **EC scheme id:** `layer.ec_scheme` (`EcSchemeKind`, `"reed-solomon"` wire name); only Reed–Solomon is wired end-to-end ([#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14) tracks RLNC and further schemes).
 - **Abstract RS mesh:** heap-backed graphs and `PeerSessionStats` (`sim.rs_mesh`): 2-node, 4-node ring, 6-node `TestNetwork`-style topology, **partition/heal** line test, chunk-len variant; with `ZIG_ETHP2P_STRESS=1`, larger six-node budget plus **8-** and **16-node** rings.
 - **Gossipsub (sim / wire helpers):** transport, protocol, broadcast, interop, `RPC` encode/decode (including **`partial`** / `PartialMessagesExtension`), full `ControlMessage`, varint length prefix, in-process **`gossipsub_rpc_host`** for tests (`sim.gossipsub_*`, `broadcast.gossip`).
-- **QUIC:** `transport.eth_ec_quic` — IETF QUIC, TLS 1.3, ALPN `eth-ec-broadcast`, **unidirectional** BCAST/SESS/CHUNK streams matching the ethp2p Go reference (`peer.go` `OpenUniStream`/`AcceptUniStream`). `PeerConn` poll-driven lifecycle sketch included. See [QUIC transport](#quic-transport-lsquic-build).
+- **QUIC:** `transport.eth_ec_quic` — IETF QUIC, TLS 1.3, ALPN `eth-ec-broadcast`, **unidirectional** BCAST/SESS/CHUNK streams matching the ethp2p Go reference (`peer.go` `OpenUniStream`/`AcceptUniStream`). `PeerConn` is poll-driven; `broadcast.engine_quic.EngineQuicHost` connects inbound streams to the RS channel path. See [QUIC transport](#quic-transport-lsquic-build).
 - **CI:** aligned with [ethp2p's `ci.yml`](https://github.com/ethp2p/ethp2p/blob/main/.github/workflows/ci.yml): `zig build test-broadcast`, `test-sim-rs`, `test-sim-gossipsub` (Debug + TSan), `test-quic` (**`quic-transport`** job: vendored TLS, **45m** job timeout + **`timeout 40m`** on the command so a hung poll loop cannot exhaust the runner), `test-stress-ci` on **`main` only**, plus lint (`zig fmt --check`, `zig build`, `zig ast-check`). `build.zig.zon` **`minimum_zig_version`** must match workflow **`ZIG_VERSION`**; `just check-zig-ci-align` checks that locally.
 - **One-shot local verification:** `zig build test` runs the full suite.
 
@@ -69,6 +69,7 @@ lsquic + BoringSSL are always compiled — no build flag is needed. **Windows** 
 | `eth_ec_quic_common.zig` / `eth_ec_quic_enabled.zig` | Shared config and ALPN string; **enabled** path implements `listenImpl` / `dialImpl` and integration tests. |
 | `eth_ec_quic.zig` | Public `transport.eth_ec_quic`: `listen`, `dial`, `logInit` (programmatic lsquic logger), listener wrapper. |
 | `eth_ec_quic_peer.zig` | `PeerConn` poll-driven state machine: `idle → handshaking → active → closed`; symmetric BCAST UNI handshake + `runAcceptLoop` dispatch by protocol selector byte. |
+| `broadcast/engine_quic.zig` | `EngineQuicHost`: SESS `session_open` → `ChannelRs.attachRelaySession`, CHUNK → `relayIngestChunkVerifiedEngine` (issue #37). |
 | `vendor/lsquic_zig/patch_uni.sh` | Build-time patch that removes `static` from `create_uni_stream_out` in lsquic and appends a public `lsquic_conn_make_uni_stream()` wrapper (lsquic 4.3 has no public API for outgoing UNI streams). |
 
 **Operation**
@@ -90,7 +91,7 @@ Call **`quic.logInit("debug")`** (or any `lsquic_set_log_level` level) to enable
 
 ## Pending work
 
-- **`PeerConn` wiring:** connect `eth_ec_quic_peer.zig` to `Engine`/channel tables (currently a lifecycle sketch only).
+- **Outbound chunk path:** origin `ChannelRs` publish/drain over QUIC (sending CHUNK streams to peers) is not wired yet; inbound relay via `EngineQuicHost` is implemented (#37).
 - **Erasure coding:** **RLNC** (strategy, preamble, chunk layout) and any further `Scheme` types beyond Reed–Solomon ([#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14)).
 - **libp2p:** Noise handshake, multistream-select, Yamux, identify — handled by zeam's rust-libp2p layer; out of scope for this repo.
 
