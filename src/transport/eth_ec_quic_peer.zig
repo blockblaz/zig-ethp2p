@@ -45,6 +45,11 @@ pub const PeerConn = struct {
 
     allocator: std.mem.Allocator,
 
+    /// Optional callback for inbound SESS streams.  Set by the owning Engine.
+    on_sess_stream: ?*const fn (self: *PeerConn, st: *quic.QuicStream) void = null,
+    /// Optional callback for inbound CHUNK streams.  Set by the owning Engine.
+    on_chunk_stream: ?*const fn (self: *PeerConn, st: *quic.QuicStream) void = null,
+
     pub fn init(
         allocator: std.mem.Allocator,
         conn: *quic.QuicConnection,
@@ -121,7 +126,7 @@ pub const PeerConn = struct {
         }
     }
 
-    /// Dispatch an inbound UNI stream by reading its single-byte selector.
+    /// Dispatch an inbound UNI stream by reading its single-byte protocol selector.
     ///
     /// Matches `runAcceptLoop` in `peer_in.go`:
     ///   prot, err := protocol.ReadSelector(s)
@@ -130,22 +135,30 @@ pub const PeerConn = struct {
     ///   case CHUNK: go processChunk(s)
     ///   }
     ///
-    /// In this sketch the dispatch is a no-op after classification.
-    /// A full implementation would hand `st` off to the session or chunk handler.
+    /// Handlers are optional callbacks set by the owning Engine.  When null,
+    /// the stream is acknowledged and discarded (graceful no-op).
     fn dispatchInboundUniStream(self: *PeerConn, st: *quic.QuicStream) void {
-        _ = self;
         const raw = quic.streamReadSlice(st);
         if (raw.len == 0) return;
 
         const sel: protocol.Protocol = @enumFromInt(raw[0]);
-        const kind: InboundStreamKind = switch (sel) {
-            .bcast => .bcast,
-            .sess => .sess,
-            .chunk => .chunk,
-            else => .unknown,
-        };
-        _ = kind;
-        // TODO: hand off `st` to the appropriate handler (session table / chunk semaphore).
+        switch (sel) {
+            .bcast => {
+                // Secondary BCAST stream from peer (allowed but typically ignored
+                // once the primary control stream is established).
+                if (self.bcast_in == null) self.bcast_in = st;
+            },
+            .sess => {
+                if (self.on_sess_stream) |cb| cb(self, st) else quic.streamCancelRead(st);
+            },
+            .chunk => {
+                if (self.on_chunk_stream) |cb| cb(self, st) else quic.streamCancelRead(st);
+            },
+            else => {
+                // Unknown protocol — cancel to release flow-control credit.
+                quic.streamCancelRead(st);
+            },
+        }
     }
 
     /// Graceful shutdown: close the outbound BCAST stream and mark closed.

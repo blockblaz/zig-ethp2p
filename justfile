@@ -23,9 +23,9 @@ test-sim-rs:
 test-sim-gossipsub:
     zig build test-sim-gossipsub --summary all
 
-# Optional QUIC + OpenSSL (Linux/macOS); same as CI job `quic-transport`.
+# QUIC transport tests (lsquic + BoringSSL); same as CI job `quic-transport`.
 test-quic:
-    zig build test-quic -Denable-quic --summary all
+    zig build test-quic --summary all
 
 # Main-branch CI job: full root + ZIG_ETHP2P_STRESS + TSan.
 test-stress-ci:

@@ -1,4 +1,4 @@
-//! QUIC + TLS when `-Denable-quic` is set (`src/transport/lsquic_quic_shim.zig` + `vendor/lsquic_zig`).
+//! QUIC + TLS implementation (`src/transport/zquic_quic_shim.zig` + [zquic](https://github.com/ch4r10t33r/zquic)).
 
 const std = @import("std");
 const quic = @import("quic");
@@ -71,6 +71,8 @@ fn toQuicConfig(
         .alpn = alpn_list,
         .inline_server_cert_der = config.server_certificate_der,
         .inline_server_priv_p256 = config.server_private_key_der,
+        .server_cert_pem_path = config.server_certificate_pem_path,
+        .server_private_key_pem_path = config.server_private_key_pem_path,
         .allow_insecure = config.tls_insecure_skip_verify,
         .max_idle_timeout_ms = maxIdleTimeoutMs(config.max_idle_timeout_ns),
         .max_udp_payload = 1350,
@@ -82,7 +84,7 @@ pub fn listenImpl(
     config: common.EthEcQuicConfig,
     address: common.ListenAddress,
 ) !*quic.QuicEndpoint {
-    if (config.server_certificate_der == null or config.server_private_key_der == null) {
+    if (config.server_certificate_pem_path == null or config.server_private_key_pem_path == null) {
         return error.MissingServerIdentity;
     }
     var alpn_list = [_][]const u8{common.alpn_eth_ec_broadcast};
@@ -90,6 +92,21 @@ pub fn listenImpl(
     const bind_s = try formatSocketAddr(allocator.*, address);
     defer allocator.*.free(bind_s);
     return try quic.endpointInit(allocator, bind_s, &qc);
+}
+
+/// Create a QUIC server endpoint on an already-bound external socket fd.
+pub fn listenImplFromFd(
+    allocator: *std.mem.Allocator,
+    fd: std.posix.fd_t,
+    local_addr: std.net.Address,
+    config: common.EthEcQuicConfig,
+) !*quic.QuicEndpoint {
+    if (config.server_certificate_pem_path == null or config.server_private_key_pem_path == null) {
+        return error.MissingServerIdentity;
+    }
+    var alpn_list = [_][]const u8{common.alpn_eth_ec_broadcast};
+    var qc = toQuicConfig(config, &alpn_list);
+    return try quic.endpointInitFromFd(allocator, fd, local_addr, &qc);
 }
 
 pub fn dialImpl(
@@ -135,8 +152,8 @@ test "QUIC listen + dial, TLS handshake, ALPN eth-ec-broadcast" {
     var alloc = gpa.allocator();
 
     const srv_cfg = common.EthEcQuicConfig{
-        .server_certificate_der = test_certs.server_cert_der,
-        .server_private_key_der = test_certs.server_key_der,
+        .server_certificate_pem_path = "src/transport/testdata/zethp2p_cert.pem",
+        .server_private_key_pem_path = "src/transport/testdata/zethp2p_key.pem",
         .tls_insecure_skip_verify = true,
     };
     var alpn_srv = [_][]const u8{common.alpn_eth_ec_broadcast};
@@ -218,8 +235,8 @@ test "QUIC UNI streams: symmetric BCAST handshake + SESS session_open (wire fram
     var alloc = gpa.allocator();
 
     const srv_cfg = common.EthEcQuicConfig{
-        .server_certificate_der = test_certs.server_cert_der,
-        .server_private_key_der = test_certs.server_key_der,
+        .server_certificate_pem_path = "src/transport/testdata/zethp2p_cert.pem",
+        .server_private_key_pem_path = "src/transport/testdata/zethp2p_key.pem",
         .tls_insecure_skip_verify = true,
     };
     var alpn_srv = [_][]const u8{common.alpn_eth_ec_broadcast};

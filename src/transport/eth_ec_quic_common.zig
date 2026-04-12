@@ -16,6 +16,10 @@ pub const EthEcQuicConfig = struct {
     server_certificate_der: ?[]const u8 = null,
     /// TLS: PKCS#8 private key (DER), for `listen` (Ed25519 or P-256 as supported by the linked QUIC stack).
     server_private_key_der: ?[]const u8 = null,
+    /// TLS: PEM certificate path (used by the zquic backend; preferred for `listen`).
+    server_certificate_pem_path: ?[]const u8 = null,
+    /// TLS: PEM private key path (used by the zquic backend).
+    server_private_key_pem_path: ?[]const u8 = null,
     /// Client `dial` only: accept any server certificate (tests and local dev; not for production).
     tls_insecure_skip_verify: bool = false,
 

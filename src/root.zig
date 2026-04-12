@@ -1,9 +1,14 @@
 //! Zig implementation of [ethp2p](https://github.com/ethp2p/ethp2p) wire formats.
 //! Behavior is validated against the reference Go stack; see `UPSTREAM.md`.
 //! Split CI test roots live in `ci_root_broadcast.zig`, `ci_root_sim_rs.zig`, and `ci_root_sim_gossipsub.zig`; update them when adding tests under those areas.
-//! QUIC transport (`transport.eth_ec_quic`): optional **lsquic + BoringSSL** with `-Denable-quic`; see repository `README.md`.
+//! QUIC transport (`transport.eth_ec_quic`): **zquic** (pure Zig); see repository `README.md`.
 
 pub const wire = @import("wire/root.zig");
+
+/// Discovery layer: discv5-based peer discovery, ENR handling, duty-aware
+/// peer selection, and slot-phase-aware QUIC connection warmup.
+/// See `discovery/root.zig` for the full module map.
+pub const discovery = @import("discovery/root.zig");
 
 /// Abstract multi-hop RS scenarios aligned with ethp2p `sim/scenario_test.go` (strategy-only; no libp2p).
 /// `rs_mesh.MeshParams.partition` models link outage + heal (upstream simnet-rs CI also matches `TestNodeReconnection`, which is not implemented in Go on ethp2p `main` today).
@@ -36,6 +41,7 @@ pub const layer = struct {
 /// QUIC listen/dial — see `transport/eth_ec_quic.zig` and README; mapping streams to `wire.*` is issue **#27**.
 pub const transport = struct {
     pub const eth_ec_quic = @import("transport/eth_ec_quic.zig");
+    pub const shared_udp_socket = @import("transport/shared_udp_socket.zig");
 };
 
 pub const broadcast = struct {
@@ -69,4 +75,5 @@ test {
     _ = broadcast.observer;
     _ = broadcast.gossip;
     _ = broadcast.relay_async_verify;
+    _ = discovery;
 }
