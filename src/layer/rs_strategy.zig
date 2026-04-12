@@ -4,6 +4,7 @@ const std = @import("std");
 const bitmap_mod = @import("bitmap.zig");
 const broadcast_types = @import("broadcast_types.zig");
 const emit_planner = @import("emit_planner.zig");
+const latency_tier = @import("latency_tier.zig");
 const rs_encode = @import("rs_encode.zig");
 const rs_init = @import("rs_init.zig");
 
@@ -405,16 +406,36 @@ pub const RsStrategy = struct {
         return out;
     }
 
+    const PollPeer = struct {
+        peer: []const u8,
+        ps: *PeerState,
+    };
+
+    fn lessPollPeer(_: void, a: PollPeer, b: PollPeer) bool {
+        const ta = latency_tier.latencyTier(a.ps.stats.rtt_ms);
+        const tb = latency_tier.latencyTier(b.ps.stats.rtt_ms);
+        if (ta != tb) return @intFromEnum(ta) < @intFromEnum(tb);
+        return a.ps.stats.rtt_ms < b.ps.stats.rtt_ms;
+    }
+
     pub fn pollChunks(self: *RsStrategy) (Allocator.Error || emit_planner.PlannerError)![]broadcast_types.ChunkDispatch(ChunkIdent) {
         const allocator = self.allocator;
         var list: std.ArrayListUnmanaged(broadcast_types.ChunkDispatch(ChunkIdent)) = .{};
         errdefer list.deinit(allocator);
 
+        var order: std.ArrayListUnmanaged(PollPeer) = .{};
+        defer order.deinit(allocator);
+
         var it = self.peers.iterator();
         while (it.next()) |kv| {
             if (kv.value_ptr.completed) continue;
-            const peer = kv.key_ptr.*;
-            if (try self.allocate(peer, kv.value_ptr)) |disp| {
+            try order.append(allocator, .{ .peer = kv.key_ptr.*, .ps = kv.value_ptr });
+        }
+
+        std.sort.pdq(PollPeer, order.items, {}, lessPollPeer);
+
+        for (order.items) |entry| {
+            if (try self.allocate(entry.peer, entry.ps)) |disp| {
                 try list.append(allocator, disp);
             }
         }
@@ -524,6 +545,44 @@ test "origin decode roundtrip" {
     const out = try strat.decode();
     defer gpa.free(out);
     try std.testing.expectEqualSlices(u8, &msg, out);
+}
+
+test "pollChunks prefers inner-tier peer by RTT" {
+    const gpa = std.testing.allocator;
+    const msg = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    const cfg = RsConfig{
+        .data_shards = 4,
+        .parity_shards = 2,
+        .chunk_len = 0,
+        .bitmap_threshold = 50,
+        .forward_multiplier = 4,
+        .disable_bitmap = false,
+    };
+
+    var origin = try RsStrategy.newOrigin(gpa, cfg, &msg);
+    defer origin.deinit();
+
+    var relay = try RsStrategy.newRelay(gpa, cfg, &origin.preamble);
+    defer relay.deinit();
+
+    const peer_outer = "outer";
+    const peer_inner = "inner";
+    var stats_outer: broadcast_types.PeerSessionStats = .{ .peer_id = peer_outer, .rtt_ms = 200 };
+    var stats_inner: broadcast_types.PeerSessionStats = .{ .peer_id = peer_inner, .rtt_ms = 20 };
+    try relay.attachPeer(peer_inner, &stats_inner);
+    try relay.attachPeer(peer_outer, &stats_outer);
+
+    // Ingest from a sender not in `peers` so downstream peer bitmaps stay empty for forwarding.
+    const upstream = "upstream";
+    for (0..4) |i| {
+        const r = try relay.takeChunk(upstream, .{ .index = @intCast(i) }, origin.chunks[i], null);
+        try std.testing.expectEqual(broadcast_types.Verdict.accepted, r.verdict);
+    }
+
+    const outgoing = try relay.pollChunks();
+    defer gpa.free(outgoing);
+    try std.testing.expect(outgoing.len >= 1);
+    try std.testing.expectEqualStrings(peer_inner, outgoing[0].peer);
 }
 
 test "relay takeChunk and decode" {

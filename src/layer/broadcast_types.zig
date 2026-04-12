@@ -1,5 +1,7 @@
 //! Broadcast-layer enums and aliases aligned with ethp2p `broadcast/types.go`.
 
+const std = @import("std");
+
 pub const ChunkHandle = u64;
 
 pub const protocol_v1: u32 = 1;
@@ -33,6 +35,8 @@ pub const DedupCancel = struct {
 /// Per-peer per-session stats; the session owns and mutates fields. Strategy holds a pointer only.
 pub const PeerSessionStats = struct {
     peer_id: []const u8 = &.{},
+    /// Measured RTT in ms; `maxInt(u32)` means unknown (lowest dispatch preference).
+    rtt_ms: u32 = std.math.maxInt(u32),
 };
 
 pub fn ChunkDispatch(comptime ChunkId: type) type {

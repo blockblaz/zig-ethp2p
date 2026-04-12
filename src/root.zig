@@ -31,6 +31,7 @@ pub const layer = struct {
     pub const rs_encode = @import("layer/rs_encode.zig");
     pub const rs_init = @import("layer/rs_init.zig");
     pub const rs_strategy = @import("layer/rs_strategy.zig");
+    pub const latency_tier = @import("layer/latency_tier.zig");
     pub const dedup = @import("layer/dedup.zig");
     pub const dedup_registry = @import("layer/dedup_registry.zig");
     pub const verify_queue = @import("layer/verify_queue.zig");
@@ -62,6 +63,7 @@ test {
     _ = layer.verify_queue;
     _ = layer.verify_workers;
     _ = layer.ec_scheme;
+    _ = layer.latency_tier;
     _ = sim.rs_mesh;
     _ = sim.gossipsub_transport;
     _ = sim.gossipsub_protocol;
