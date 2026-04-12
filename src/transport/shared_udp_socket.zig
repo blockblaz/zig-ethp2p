@@ -6,9 +6,9 @@
 //!   1. Offer the packet to discv5 via `Node.injectDatagram`.
 //!      discv5 validates the AES-masked header; non-discv5 packets produce a decode
 //!      error and `injectDatagram` returns `false`.
-//!   2. If discv5 rejected the packet, forward it to lsquic via `feedPacket`.
+//!   2. If discv5 rejected the packet, forward it to zquic via `feedPacket`.
 //!
-//! After draining all pending packets call `processEngineOnly` so lsquic can run
+//! After draining all pending packets call `processEngineOnly` so zquic can run
 //! its internal timers and flush any queued outbound QUIC frames.
 
 const std = @import("std");
