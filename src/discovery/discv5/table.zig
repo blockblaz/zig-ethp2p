@@ -7,6 +7,7 @@
 //! Reference: discv5 spec §5.1 "Node Table".
 
 const std = @import("std");
+const crypto = @import("crypto.zig");
 const standard = @import("../enr/standard.zig");
 
 pub const NodeId = standard.NodeId;
@@ -23,6 +24,8 @@ pub const max_entries: usize = k * num_buckets;
 /// A single entry in a routing bucket.
 pub const Entry = struct {
     node_id: NodeId,
+    /// Compressed secp256k1 public key of the remote node.
+    pubkey: [crypto.pubkey_len]u8 = [_]u8{0} ** crypto.pubkey_len,
     /// UDP address used for discv5 communication.
     udp_addr: std.net.Address,
     /// ENR sequence number of the last-seen record.

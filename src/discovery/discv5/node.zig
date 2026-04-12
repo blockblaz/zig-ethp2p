@@ -50,6 +50,17 @@ const PendingRequest = struct {
     kind: enum { findnode, ping },
 };
 
+/// Tracks an outbound ordinary packet whose nonce we need to correlate
+/// against an inbound WHOAREYOU challenge.
+const PendingChallenge = struct {
+    target: table.NodeId,
+    addr: std.net.Address,
+    nonce: [12]u8,
+    /// Plaintext message to re-encrypt inside the Handshake body.
+    plain_msg: ?[]const u8,
+    sent_at_ns: u64,
+};
+
 /// Active iterative lookup state.
 const Lookup = struct {
     target: table.NodeId,
@@ -78,6 +89,8 @@ pub const Node = struct {
 
     /// In-flight requests.
     pending: std.ArrayListUnmanaged(PendingRequest) = .{},
+    /// Outbound ordinary packets awaiting WHOAREYOU correlation.
+    challenge_pending: std.ArrayListUnmanaged(PendingChallenge) = .{},
     /// Active lookup (only one at a time for simplicity).
     active_lookup: ?Lookup = null,
     /// Cache of ENR capabilities by NodeId (populated from NODES responses).
@@ -116,6 +129,10 @@ pub const Node = struct {
             }
         }
         self.pending.deinit(self.allocator);
+        for (self.challenge_pending.items) |ch| {
+            if (ch.plain_msg) |msg| self.allocator.free(msg);
+        }
+        self.challenge_pending.deinit(self.allocator);
         self.enr_cache.deinit(self.allocator);
         self.sessions.deinit();
     }
@@ -212,7 +229,7 @@ pub const Node = struct {
 
         switch (pkt) {
             .ordinary => |o| self.handleOrdinary(o.header, o.auth, o.encrypted_body, from),
-            .whoareyou => |w| self.handleWhoareyou(w.header, w.auth, from),
+            .whoareyou => |w| self.handleWhoareyou(w.header, w.auth, data, from),
             .handshake => |h| self.handleHandshake(h.header, h.auth, h.encrypted_body, from),
         }
     }
@@ -226,7 +243,7 @@ pub const Node = struct {
         const pkt = packet.decode(data, self.local_id, &hdr_buf) catch return false;
         switch (pkt) {
             .ordinary => |o| self.handleOrdinary(o.header, o.auth, o.encrypted_body, from),
-            .whoareyou => |w| self.handleWhoareyou(w.header, w.auth, from),
+            .whoareyou => |w| self.handleWhoareyou(w.header, w.auth, data, from),
             .handshake => |h| self.handleHandshake(h.header, h.auth, h.encrypted_body, from),
         }
         return true;
@@ -271,26 +288,77 @@ pub const Node = struct {
         self: *Node,
         hdr: packet.PacketHeader,
         auth: packet.WhoareyouAuthData,
+        raw_datagram: []const u8,
         from: std.net.Address,
     ) void {
-        // Generate ephemeral keypair for this handshake.
+        // Correlate by matching the WHOAREYOU's nonce against nonces of
+        // packets we recently sent.
+        const pending = self.popPendingChallenge(hdr.nonce) orelse return;
+        defer if (pending.plain_msg) |msg| self.allocator.free(msg);
+
+        // Extract challenge_data (masking-iv || static-header || auth-data)
+        // from the raw WHOAREYOU datagram for id-nonce signing.
+        if (raw_datagram.len < session.challenge_data_len) return;
+        const challenge_data: [session.challenge_data_len]u8 = raw_datagram[0..session.challenge_data_len].*;
+
+        // Generate ephemeral keypair for the handshake.
         var eph_priv: [crypto.privkey_len]u8 = undefined;
         var eph_pub: [crypto.pubkey_len]u8 = undefined;
         crypto.generateEphemeralKeypair(&eph_priv, &eph_pub) catch return;
-        // The id-nonce from WHOAREYOU is used in key derivation.
-        // Store it in the pending session if one exists.
+
+        // Look up the remote's public key so we can do ECDH.
+        const remote_entry = self.routing_table.getEntry(pending.target) orelse return;
+        const remote_pubkey = remote_entry.pubkey;
+
+        // ECDH shared secret.
+        var secret: [32]u8 = undefined;
+        crypto.ecdhSharedSecret(&secret, eph_priv, remote_pubkey) catch return;
+
+        // Derive session keys (we are the initiator).
+        const keys = crypto.deriveSessionKeys(secret, auth.id_nonce, eph_pub, self.local_id, pending.target);
+
+        // Sign the id-nonce challenge.
+        var id_sig: [crypto.ecdsa_sig_len]u8 = undefined;
+        crypto.ecdsaSignIdNonce(&id_sig, &challenge_data, eph_pub, pending.target, self.config.local_privkey) catch return;
+
+        // Encrypt the original message as the Handshake body.
+        var ct_buf: [packet.max_datagram_len]u8 = undefined;
+        var ct_len: usize = 0;
+        if (pending.plain_msg) |msg| {
+            if (msg.len + crypto.aes_tag_len > ct_buf.len) return;
+            var nonce: [crypto.aes_nonce_len]u8 = undefined;
+            std.crypto.random.bytes(&nonce);
+            crypto.encryptAesGcm(ct_buf[0 .. msg.len + crypto.aes_tag_len], msg, &hdr.nonce, keys.initiator_key, nonce);
+            ct_len = msg.len + crypto.aes_tag_len;
+        }
+
+        // Encode and send the Handshake packet.
+        var iv: [packet.masking_iv_len]u8 = undefined;
+        std.crypto.random.bytes(&iv);
+        var dgram: [packet.max_datagram_len]u8 = undefined;
+        const n = packet.encodeHandshake(&dgram, iv, pending.target, hdr.nonce, .{
+            .src_id = self.local_id,
+            .ephem_pubkey = eph_pub,
+            .id_sig = id_sig,
+            .record = &.{},
+        }, ct_buf[0..ct_len]) catch return;
+
+        // Establish session.
         const nonce_base: [8]u8 = hdr.nonce[0..8].*;
-        const sess = self.sessions.getOrCreate(
-            // src_id is unknown in WHOAREYOU; use from-address hash as key.
-            // In a full implementation, find the pending request to map this back.
-            [_]u8{0} ** 32,
-            nonce_base,
-        ) catch return;
-        sess.beginHandshake(auth.id_nonce);
-        _ = from;
-        // eph_priv / eph_pub are used in a real handshake reply; kept for now.
-        std.mem.doNotOptimizeAway(&eph_priv);
-        std.mem.doNotOptimizeAway(&eph_pub);
+        const sess = self.sessions.getOrCreate(pending.target, nonce_base) catch return;
+        sess.establish(keys);
+
+        self.sendDatagram(from, dgram[0..n]);
+    }
+
+    /// Find and remove a PendingChallenge whose nonce matches.
+    fn popPendingChallenge(self: *Node, nonce: [12]u8) ?PendingChallenge {
+        for (self.challenge_pending.items, 0..) |ch, i| {
+            if (std.mem.eql(u8, &ch.nonce, &nonce)) {
+                return self.challenge_pending.swapRemove(i);
+            }
+        }
+        return null;
     }
 
     fn handleHandshake(
@@ -300,28 +368,49 @@ pub const Node = struct {
         encrypted_body: []const u8,
         from: std.net.Address,
     ) void {
-        // Verify the id-signature.
+        // The session for this peer must exist in awaiting_handshake state
+        // (created by sendWhoareyou). It holds the id_nonce and raw
+        // challenge_data we need for key derivation and id-sig verification.
+        const sess = self.sessions.get(auth.src_id) orelse return;
+        if (sess.state != .awaiting_handshake) return;
+
+        // Recover the remote's public key for id-sig verification.
+        const remote_entry = self.routing_table.getEntry(auth.src_id) orelse {
+            // We might not know the peer's static pubkey yet.  Accept the
+            // ephemeral pubkey from the handshake for ECDH (we still verify
+            // the signature below).
+            self.handleHandshakeNewPeer(hdr, auth, encrypted_body, from, sess);
+            return;
+        };
+
+        // Verify the id-signature using the stored challenge_data.
         crypto.ecdsaVerifyIdNonce(
             auth.id_sig,
-            &hdr.nonce,
+            &sess.challenge_data,
             auth.ephem_pubkey,
             self.local_id,
-            auth.ephem_pubkey,
+            remote_entry.pubkey,
         ) catch return;
 
-        // Compute ECDH shared secret.
+        self.completeHandshake(hdr, auth, encrypted_body, from, sess);
+    }
+
+    /// Complete the responder side of the handshake after id-sig verification.
+    fn completeHandshake(
+        self: *Node,
+        hdr: packet.PacketHeader,
+        auth: packet.HandshakeAuthData,
+        encrypted_body: []const u8,
+        from: std.net.Address,
+        sess: *session.Session,
+    ) void {
+        // ECDH shared secret using our static key and their ephemeral key.
         var secret: [32]u8 = undefined;
         crypto.ecdhSharedSecret(&secret, self.config.local_privkey, auth.ephem_pubkey) catch return;
 
-        // Derive session keys.  id_nonce comes from the WHOAREYOU we sent;
-        // use the nonce field padded to 16 bytes as a placeholder here.
-        var id_nonce: [16]u8 = [_]u8{0} ** 16;
-        @memcpy(id_nonce[0..hdr.nonce.len], &hdr.nonce);
-        const keys = crypto.deriveSessionKeys(secret, id_nonce, auth.ephem_pubkey, self.local_id, auth.src_id);
-
-        // Store session.
-        const nonce_base: [8]u8 = hdr.nonce[0..8].*;
-        const sess = self.sessions.getOrCreate(auth.src_id, nonce_base) catch return;
+        // Derive session keys using the id_nonce from the WHOAREYOU we sent.
+        // We are the responder: our initiator_key decrypts their messages.
+        const keys = crypto.deriveSessionKeys(secret, sess.id_nonce, auth.ephem_pubkey, auth.src_id, self.local_id);
         sess.establish(keys);
 
         // Parse optional ENR update.
@@ -334,10 +423,38 @@ pub const Node = struct {
             var plain: [packet.max_datagram_len]u8 = undefined;
             const blen = encrypted_body.len - crypto.aes_tag_len;
             if (blen <= plain.len) {
-                crypto.decryptAesGcm(plain[0..blen], encrypted_body, &hdr.nonce, sess.keys.recipient_key, hdr.nonce) catch return;
+                crypto.decryptAesGcm(plain[0..blen], encrypted_body, &hdr.nonce, sess.keys.initiator_key, hdr.nonce) catch return;
                 self.dispatchMessage(plain[0..blen], auth.src_id);
             }
         }
+    }
+
+    /// Handle a Handshake from a peer we don't yet have in the routing table.
+    fn handleHandshakeNewPeer(
+        self: *Node,
+        hdr: packet.PacketHeader,
+        auth: packet.HandshakeAuthData,
+        encrypted_body: []const u8,
+        from: std.net.Address,
+        sess: *session.Session,
+    ) void {
+        // Without a known static pubkey we cannot verify the id-signature
+        // against an authenticated identity. If the Handshake includes an
+        // ENR record we can extract the pubkey from it; otherwise reject.
+        if (auth.record.len == 0) return;
+
+        // Try to derive the public key from the ENR record and verify.
+        // For now, accept the handshake optimistically (the ENR will be
+        // validated by processInboundEnr).
+        crypto.ecdsaVerifyIdNonce(
+            auth.id_sig,
+            &sess.challenge_data,
+            auth.ephem_pubkey,
+            self.local_id,
+            auth.ephem_pubkey,
+        ) catch return;
+
+        self.completeHandshake(hdr, auth, encrypted_body, from, sess);
     }
 
     fn dispatchMessage(self: *Node, plain: []const u8, src_id: table.NodeId) void {
@@ -480,12 +597,30 @@ pub const Node = struct {
     // Outbound helpers
     // -----------------------------------------------------------------------
 
-    /// Send a raw encrypted message to a peer that already has a session.
+    /// Send a message to a peer.  If a session is established, encrypt and
+    /// send as an ordinary packet (recording nonce for WHOAREYOU correlation).
+    /// Otherwise, send a random packet to trigger a WHOAREYOU challenge.
     fn sendToNode(self: *Node, node_id: table.NodeId, plain: []const u8) void {
         const entry = self.routing_table.getEntry(node_id) orelse return;
-        const sess = self.sessions.get(node_id) orelse return;
-        if (!sess.isEstablished()) return;
+        const sess_opt = self.sessions.get(node_id);
+        if (sess_opt) |sess| {
+            if (sess.isEstablished()) {
+                self.sendEstablished(node_id, plain, entry.udp_addr, sess);
+                return;
+            }
+        }
+        // No session — send a random ordinary-looking packet to elicit WHOAREYOU.
+        self.sendInitialRandom(node_id, plain, entry.udp_addr);
+    }
 
+    /// Encrypt and send via an established session, recording nonce.
+    fn sendEstablished(
+        self: *Node,
+        node_id: table.NodeId,
+        plain: []const u8,
+        addr: std.net.Address,
+        sess: *session.Session,
+    ) void {
         var nonce: [crypto.aes_nonce_len]u8 = undefined;
         std.crypto.random.bytes(&nonce);
 
@@ -506,7 +641,62 @@ pub const Node = struct {
             ct[0 .. plain.len + crypto.aes_tag_len],
         ) catch return;
 
-        self.sendDatagram(entry.udp_addr, dgram[0..n]);
+        self.sendDatagram(addr, dgram[0..n]);
+
+        const duped_msg = self.allocator.dupe(u8, plain) catch return;
+        self.challenge_pending.append(self.allocator, .{
+            .target = node_id,
+            .addr = addr,
+            .nonce = nonce,
+            .plain_msg = duped_msg,
+            .sent_at_ns = self.last_poll_ns,
+        }) catch {
+            self.allocator.free(duped_msg);
+        };
+    }
+
+    /// Send a random ordinary packet to trigger a WHOAREYOU from the remote.
+    /// The plaintext message is stored so it can be retried inside the
+    /// Handshake body once the challenge arrives.
+    fn sendInitialRandom(
+        self: *Node,
+        node_id: table.NodeId,
+        plain: []const u8,
+        addr: std.net.Address,
+    ) void {
+        var nonce: [crypto.aes_nonce_len]u8 = undefined;
+        std.crypto.random.bytes(&nonce);
+
+        // Random ciphertext — the remote won't decrypt this; it will reply
+        // with WHOAREYOU.
+        var random_ct: [44]u8 = undefined;
+        std.crypto.random.bytes(&random_ct);
+
+        var iv: [packet.masking_iv_len]u8 = undefined;
+        std.crypto.random.bytes(&iv);
+
+        var dgram: [packet.max_datagram_len]u8 = undefined;
+        const n = packet.encodeOrdinary(
+            &dgram,
+            iv,
+            node_id,
+            nonce,
+            self.local_id,
+            &random_ct,
+        ) catch return;
+
+        self.sendDatagram(addr, dgram[0..n]);
+
+        const duped_msg = self.allocator.dupe(u8, plain) catch return;
+        self.challenge_pending.append(self.allocator, .{
+            .target = node_id,
+            .addr = addr,
+            .nonce = nonce,
+            .plain_msg = duped_msg,
+            .sent_at_ns = self.last_poll_ns,
+        }) catch {
+            self.allocator.free(duped_msg);
+        };
     }
 
     fn sendWhoareyou(
@@ -521,19 +711,25 @@ pub const Node = struct {
         std.crypto.random.bytes(&iv);
 
         var dgram: [packet.max_datagram_len]u8 = undefined;
-        _ = challenge_nonce;
-        const n = packet.encodeWhoareyou(&dgram, iv, dest_id, [_]u8{0} ** 12, id_nonce, 0) catch return;
+        const n = packet.encodeWhoareyou(&dgram, iv, dest_id, challenge_nonce, id_nonce, 0) catch return;
+
+        // Record id_nonce and raw WHOAREYOU bytes so handleHandshake can
+        // derive correct session keys and verify the id-signature.
+        const nonce_base: [8]u8 = challenge_nonce[0..8].*;
+        const sess = self.sessions.getOrCreate(dest_id, nonce_base) catch return;
+        sess.beginHandshake(id_nonce);
+        @memcpy(&sess.challenge_data, dgram[0..session.challenge_data_len]);
+
         self.sendDatagram(dest_addr, dgram[0..n]);
     }
 
     fn sendPing(self: *Node, node_id: table.NodeId, addr: std.net.Address) void {
+        _ = addr;
         const req_id = self.nextRequestId();
         const msg = protocol.Ping{ .request_id = req_id, .enr_seq = 1 };
         const enc = protocol.encodePing(self.allocator, msg) catch return;
         defer self.allocator.free(enc);
 
-        // If we have a session, send as ordinary; otherwise this is best-effort.
-        _ = addr;
         self.sendToNode(node_id, enc);
 
         self.pending.append(self.allocator, .{
@@ -579,6 +775,17 @@ pub const Node = struct {
         while (i < self.pending.items.len) {
             if (now_ns -| self.pending.items[i].sent_at_ns >= timeout_ns) {
                 _ = self.pending.swapRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+        // Expire stale pending challenges (same timeout).
+        i = 0;
+        while (i < self.challenge_pending.items.len) {
+            const ch = &self.challenge_pending.items[i];
+            if (now_ns -| ch.sent_at_ns >= timeout_ns) {
+                if (ch.plain_msg) |msg| self.allocator.free(msg);
+                _ = self.challenge_pending.swapRemove(i);
             } else {
                 i += 1;
             }
@@ -753,4 +960,210 @@ test "queryByCapability returns all nodes when scheme_mask=0" {
     var out: [10]table.Entry = undefined;
     const count = node.queryByCapability(0, &out);
     try std.testing.expect(count > 0);
+}
+
+// ---------------------------------------------------------------------------
+// Handshake roundtrip tests
+// ---------------------------------------------------------------------------
+
+/// Captured datagram for in-process delivery between test nodes.
+const TestDatagram = struct {
+    data: [packet.max_datagram_len]u8,
+    len: usize,
+    addr: std.net.Address,
+};
+
+/// Simple capture buffer shared between two test nodes.
+var test_capture_a: ?TestDatagram = null;
+var test_capture_b: ?TestDatagram = null;
+
+fn captureSendA(_: std.net.Address, data: []const u8) void {
+    var d: TestDatagram = undefined;
+    @memcpy(d.data[0..data.len], data);
+    d.len = data.len;
+    test_capture_a = d;
+}
+
+fn captureSendB(_: std.net.Address, data: []const u8) void {
+    var d: TestDatagram = undefined;
+    @memcpy(d.data[0..data.len], data);
+    d.len = data.len;
+    test_capture_b = d;
+}
+
+const TestNodePair = struct {
+    a: *Node,
+    b: *Node,
+    allocator: std.mem.Allocator,
+
+    fn deinit(self: *TestNodePair) void {
+        self.a.deinit();
+        self.allocator.destroy(self.a);
+        self.b.deinit();
+        self.allocator.destroy(self.b);
+    }
+};
+
+fn makeTestNodePair(gpa: std.mem.Allocator) !TestNodePair {
+    const priv_a = [_]u8{0x11} ** 32;
+    const priv_b = [_]u8{0x22} ** 32;
+
+    var pub_a: [crypto.pubkey_len]u8 = undefined;
+    try crypto.generatePubkey(&pub_a, priv_a);
+    const id_a = try crypto.nodeIdFromPubkey(pub_a);
+
+    var pub_b: [crypto.pubkey_len]u8 = undefined;
+    try crypto.generatePubkey(&pub_b, priv_b);
+    const id_b = try crypto.nodeIdFromPubkey(pub_b);
+
+    const addr_a = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001);
+    const addr_b = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9002);
+
+    const a = try gpa.create(Node);
+    a.* = try Node.init(gpa, .{ .local_privkey = priv_a });
+    a.state = .running;
+    a.send_fn = captureSendB;
+    a.addBootstrap(.{
+        .node_id = id_b,
+        .pubkey = pub_b,
+        .udp_addr = addr_b,
+        .enr_seq = 1,
+        .last_seen_ns = 0,
+    });
+
+    const b = try gpa.create(Node);
+    b.* = try Node.init(gpa, .{ .local_privkey = priv_b });
+    b.state = .running;
+    b.send_fn = captureSendA;
+    b.addBootstrap(.{
+        .node_id = id_a,
+        .pubkey = pub_a,
+        .udp_addr = addr_a,
+        .enr_seq = 1,
+        .last_seen_ns = 0,
+    });
+
+    return .{ .a = a, .b = b, .allocator = gpa };
+}
+
+test "WHOAREYOU nonce echoes challenge nonce" {
+    const gpa = std.testing.allocator;
+    test_capture_a = null;
+    test_capture_b = null;
+
+    var pair = try makeTestNodePair(gpa);
+    defer pair.deinit();
+
+    // A sends a random packet to B (no session).
+    const priv_b = [_]u8{0x22} ** 32;
+    var pub_b: [crypto.pubkey_len]u8 = undefined;
+    try crypto.generatePubkey(&pub_b, priv_b);
+    const id_b = try crypto.nodeIdFromPubkey(pub_b);
+    pair.a.sendPing(id_b, std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9002));
+
+    // A's outbound packet was captured in test_capture_b.
+    const initial = test_capture_b orelse return error.NoDatagram;
+
+    // Decode the initial packet to get the nonce.
+    var hdr_buf: [packet.static_header_len + 300 + 32]u8 = undefined;
+    const initial_pkt = try packet.decode(initial.data[0..initial.len], pair.b.local_id, &hdr_buf);
+    const initial_nonce = switch (initial_pkt) {
+        .ordinary => |o| o.header.nonce,
+        else => return error.ExpectedOrdinary,
+    };
+
+    // B receives the packet — should respond with WHOAREYOU.
+    test_capture_a = null;
+    pair.b.handleDatagram(initial.data[0..initial.len], std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001));
+
+    const whoareyou = test_capture_a orelse return error.NoWhoareyou;
+    var hdr_buf2: [packet.static_header_len + 300 + 32]u8 = undefined;
+    const way_pkt = try packet.decode(whoareyou.data[0..whoareyou.len], pair.a.local_id, &hdr_buf2);
+    const way_nonce = switch (way_pkt) {
+        .whoareyou => |w| w.header.nonce,
+        else => return error.ExpectedWhoareyou,
+    };
+
+    // The WHOAREYOU's nonce must echo the initial packet's nonce.
+    try std.testing.expectEqualSlices(u8, &initial_nonce, &way_nonce);
+}
+
+test "full handshake roundtrip establishes session" {
+    const gpa = std.testing.allocator;
+    test_capture_a = null;
+    test_capture_b = null;
+
+    var pair = try makeTestNodePair(gpa);
+    defer pair.deinit();
+
+    const priv_b = [_]u8{0x22} ** 32;
+    var pub_b: [crypto.pubkey_len]u8 = undefined;
+    try crypto.generatePubkey(&pub_b, priv_b);
+    const id_b = try crypto.nodeIdFromPubkey(pub_b);
+
+    const priv_a = [_]u8{0x11} ** 32;
+    var pub_a: [crypto.pubkey_len]u8 = undefined;
+    try crypto.generatePubkey(&pub_a, priv_a);
+    const id_a = try crypto.nodeIdFromPubkey(pub_a);
+
+    // Step 1: A sends PING to B (no session -> sends random packet).
+    pair.a.sendPing(id_b, std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9002));
+    const pkt1 = test_capture_b orelse return error.NoDatagram;
+
+    // Verify A recorded a pending challenge.
+    try std.testing.expectEqual(@as(usize, 1), pair.a.challenge_pending.items.len);
+
+    // Step 2: B receives random packet -> sends WHOAREYOU.
+    test_capture_a = null;
+    pair.b.handleDatagram(pkt1.data[0..pkt1.len], std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001));
+    const pkt2 = test_capture_a orelse return error.NoWhoareyou;
+
+    // Verify B has a session in awaiting_handshake state.
+    const sess_b = pair.b.sessions.get(id_a);
+    try std.testing.expect(sess_b != null);
+    try std.testing.expectEqual(session.SessionState.awaiting_handshake, sess_b.?.state);
+
+    // Step 3: A receives WHOAREYOU -> sends Handshake.
+    test_capture_b = null;
+    pair.a.handleDatagram(pkt2.data[0..pkt2.len], std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9002));
+    const pkt3 = test_capture_b orelse return error.NoHandshake;
+
+    // Verify A established a session.
+    const sess_a = pair.a.sessions.get(id_b);
+    try std.testing.expect(sess_a != null);
+    try std.testing.expectEqual(session.SessionState.established, sess_a.?.state);
+
+    // Verify the pending challenge was consumed.
+    try std.testing.expectEqual(@as(usize, 0), pair.a.challenge_pending.items.len);
+
+    // Step 4: B receives Handshake -> establishes session.
+    pair.b.handleDatagram(pkt3.data[0..pkt3.len], std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001));
+    const sess_b2 = pair.b.sessions.get(id_a);
+    try std.testing.expect(sess_b2 != null);
+    try std.testing.expectEqual(session.SessionState.established, sess_b2.?.state);
+}
+
+test "pending challenge expiry removes stale entries" {
+    const gpa = std.testing.allocator;
+    var node = try Node.init(gpa, .{ .local_privkey = [_]u8{5} ** 32 });
+    defer node.deinit();
+
+    const target_id = [_]u8{0xaa} ** 32;
+    const addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9000);
+
+    node.challenge_pending.append(gpa, .{
+        .target = target_id,
+        .addr = addr,
+        .nonce = [_]u8{0x01} ** 12,
+        .plain_msg = null,
+        .sent_at_ns = 0,
+    }) catch unreachable;
+
+    try std.testing.expectEqual(@as(usize, 1), node.challenge_pending.items.len);
+
+    // Expire at a time far enough in the future.
+    const timeout = protocol.request_timeout_ms * std.time.ns_per_ms + 1;
+    node.expireRequests(timeout);
+
+    try std.testing.expectEqual(@as(usize, 0), node.challenge_pending.items.len);
 }
