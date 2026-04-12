@@ -8,7 +8,6 @@
         "build.zig.zon",
         "src",
         "proto",
-        "vendor",
         "UPSTREAM.md",
         "README.md",
         "LICENSE",

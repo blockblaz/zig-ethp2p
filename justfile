@@ -23,7 +23,7 @@ test-sim-rs:
 test-sim-gossipsub:
     zig build test-sim-gossipsub --summary all
 
-# QUIC transport tests (lsquic + BoringSSL); same as CI job `quic-transport`.
+# QUIC transport tests (zquic); same as CI job `quic-transport`.
 test-quic:
     zig build test-quic --summary all
 

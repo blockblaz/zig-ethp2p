@@ -20,7 +20,7 @@ pub const QuicConfig = struct {
 };
 
 pub fn logInit(_: []const u8) void {
-    // zquic has no global log level API comparable to lsquic; keep hook for callers.
+    // Reserved for future zquic logging hooks; keep signature for callers.
 }
 
 pub const QuicEndpoint = struct {
