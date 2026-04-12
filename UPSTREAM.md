@@ -54,7 +54,7 @@ When updating:
 
 ## QUIC / UDP transport
 
-`src/transport/eth_ec_quic.zig` mirrors **ALPN** `eth-ec-broadcast` and high-level **quic-go-style** limits from ethp2p `sim/host.go`. lsquic + BoringSSL are always linked via `vendor/lsquic_zig` (no build flag needed).
+`src/transport/eth_ec_quic.zig` mirrors **ALPN** `eth-ec-broadcast` and high-level **quic-go-style** limits from ethp2p `sim/host.go`. The implementation uses pure-Zig **[zquic](https://github.com/ch4r10t33r/zquic)** (`build.zig.zon` dependency); there is no vendored C QUIC/TLS stack in this repository.
 
 ### Why raw QUIC and why unidirectional streams
 
@@ -74,20 +74,9 @@ The ethp2p reference uses **unidirectional** QUIC streams for all application pr
 
 Zig alignment:
 
-- `lsquic_quic_shim.zig` detects stream type via `lsquic_stream_id() & 0x2` (bit 1 = unidirectional per RFC 9000 §2.1)
-- `incoming_uni_streams` queue holds peer-initiated UNI streams; `tryAcceptIncomingUniStream` pops them
-- `streamMakeUni` opens an outgoing UNI stream via `lsquic_conn_make_uni_stream`
+- `zquic_quic_shim.zig` classifies incoming streams by QUIC stream ID (client vs server stream numbering per RFC 9000; bidi vs uni queues) and exposes `tryAcceptIncomingUniStream` for peer-initiated UNI streams
+- `streamMakeUni` opens an outgoing UNI stream via zquic
 - `eth_ec_quic_peer.zig` implements the `PeerConn` poll-driven state machine (handshake + accept-loop); `broadcast/engine_quic.zig` (`EngineQuicHost`) forwards inbound SESS/CHUNK into `Engine` / `ChannelRs` (#37)
-
-### lsquic vendor patch
-
-lsquic 4.3 has no public API for user-initiated outgoing unidirectional streams (`lsquic_conn_make_stream` always creates bidirectional streams). The internal `create_uni_stream_out` function in `lsquic_full_conn_ietf.c` is `static`.
-
-Fix: `vendor/lsquic_zig/build.zig` runs `vendor/lsquic_zig/patch_uni.sh` as a build step. The script:
-1. Removes `static` from `create_uni_stream_out` in a patched copy of `lsquic_full_conn_ietf.c`
-2. Appends a public `lsquic_conn_make_uni_stream(lsquic_conn_t *)` wrapper at the end of the file
-
-The public declaration lives in `vendor/lsquic_zig/lsquic_ethp2p_ext.h`. The upstream source file is untouched.
 
 ### libp2p boundary
 

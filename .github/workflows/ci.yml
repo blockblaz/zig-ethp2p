@@ -103,7 +103,7 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
 
       # `timeout` (coreutils) fails the step with 124 if the build or test binary never finishes.
-      - name: QUIC transport tests (in-repo lsquic + BoringSSL)
+      - name: QUIC transport tests (zquic)
         run: timeout 40m zig build test-quic --summary all
 
   large-network-rs:
