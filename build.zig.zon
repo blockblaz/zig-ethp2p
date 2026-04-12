@@ -15,8 +15,9 @@
         "justfile",
     },
     .dependencies = .{
-        .lsquic_zig = .{
-            .path = "vendor/lsquic_zig",
+        .zquic = .{
+            .url = "https://github.com/ch4r10t33r/zquic/archive/refs/tags/v1.2.1.tar.gz",
+            .hash = "zquic-1.2.1-2zRc1AFCDwCgM1eFokgQYN4SnVIaeLzs5rSMwL1Nm8-Y",
         },
     },
 }

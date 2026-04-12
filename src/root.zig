@@ -1,7 +1,7 @@
 //! Zig implementation of [ethp2p](https://github.com/ethp2p/ethp2p) wire formats.
 //! Behavior is validated against the reference Go stack; see `UPSTREAM.md`.
 //! Split CI test roots live in `ci_root_broadcast.zig`, `ci_root_sim_rs.zig`, and `ci_root_sim_gossipsub.zig`; update them when adding tests under those areas.
-//! QUIC transport (`transport.eth_ec_quic`): **lsquic + BoringSSL** always compiled; see repository `README.md`.
+//! QUIC transport (`transport.eth_ec_quic`): **zquic** (pure Zig); see repository `README.md`.
 
 pub const wire = @import("wire/root.zig");
 

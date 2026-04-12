@@ -1,6 +1,6 @@
 //! QUIC transport for ethp2p-style EC broadcast (reference: `github.com/ethp2p/ethp2p` `sim/host.go`).
 //!
-//! Links lsquic + BoringSSL via `vendor/lsquic_zig` (always compiled — no build flag needed).
+//! QUIC via pure-Zig [zquic](https://github.com/ch4r10t33r/zquic) v1.2.0+ (TLS 1.3).
 //! Run `zig build test-quic` for handshake + BCAST/SESS stream smoke tests.
 
 const std = @import("std");
@@ -15,12 +15,7 @@ pub const ListenAddress = common.ListenAddress;
 /// Re-export so callers outside the zig-ethp2p package can name the type.
 pub const QuicEndpoint = quic.QuicEndpoint;
 
-/// Initialise lsquic logging to stderr at `level` (e.g. `"debug"`, `"info"`, `"warn"`).
-///
-/// This is the programmatic counterpart to the `ZIG_ETHP2P_LSQUIC_LOG` / `LSQUIC_LOG_LEVEL`
-/// environment variables.  Either mechanism may be used; calling `logInit` wins over the
-/// env vars when both are present because `lsquic_set_log_level` is idempotent and the last
-/// call takes effect.
+/// Reserved for future zquic logging hooks (no-op today).
 pub fn logInit(level: []const u8) void {
     quic.logInit(level);
 }
