@@ -77,7 +77,7 @@ Zig alignment:
 - `lsquic_quic_shim.zig` detects stream type via `lsquic_stream_id() & 0x2` (bit 1 = unidirectional per RFC 9000 §2.1)
 - `incoming_uni_streams` queue holds peer-initiated UNI streams; `tryAcceptIncomingUniStream` pops them
 - `streamMakeUni` opens an outgoing UNI stream via `lsquic_conn_make_uni_stream`
-- `eth_ec_quic_peer.zig` sketches the `PeerConn` poll-driven state machine (handshake + accept-loop)
+- `eth_ec_quic_peer.zig` implements the `PeerConn` poll-driven state machine (handshake + accept-loop); `broadcast/engine_quic.zig` (`EngineQuicHost`) forwards inbound SESS/CHUNK into `Engine` / `ChannelRs` (#37)
 
 ### lsquic vendor patch
 

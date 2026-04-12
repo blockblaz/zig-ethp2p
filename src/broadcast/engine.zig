@@ -74,6 +74,11 @@ pub const Engine = struct {
         try self.channels.put(self.allocator, key, ch);
         return ch;
     }
+
+    /// Look up an RS channel by id (e.g. QUIC `EngineQuicHost` inbound routing).
+    pub fn channelRs(self: *Engine, channel_id: []const u8) ?*ChannelRs {
+        return self.channels.get(channel_id);
+    }
 };
 
 pub const Error = error{ChannelExists};
