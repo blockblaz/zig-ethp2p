@@ -6,6 +6,10 @@
 
 const std = @import("std");
 const crypto = @import("crypto.zig");
+const packet = @import("packet.zig");
+
+/// Raw WHOAREYOU packet bytes used as challenge_data in id-nonce signatures.
+pub const challenge_data_len: usize = packet.masking_iv_len + packet.static_header_len + packet.whoareyou_auth_size;
 
 pub const SessionError = error{
     /// Nonce counter wrapped (2^96 packets — effectively unreachable).
@@ -31,6 +35,10 @@ pub const Session = struct {
     nonce_counter: u32 = 0,
     /// id-nonce used during handshake (retained for key derivation).
     id_nonce: [16]u8 = [_]u8{0} ** 16,
+    /// Raw WHOAREYOU bytes (masking-iv || static-header || auth-data).
+    /// Stored by the side that sent/received the WHOAREYOU so both sign
+    /// and verify use identical challenge_data.
+    challenge_data: [challenge_data_len]u8 = [_]u8{0} ** challenge_data_len,
     /// ENR seq of the last-known record for this peer.
     peer_enr_seq: u64 = 0,
 
