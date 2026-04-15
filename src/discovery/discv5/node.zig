@@ -81,6 +81,13 @@ pub const Node = struct {
     sessions: session.SessionTable,
     state: NodeState = .stopped,
 
+    /// Protects all mutable node state accessed by both poll() and injectDatagram().
+    /// Callers that run the poll loop in one thread while delivering packets via
+    /// injectDatagram() from another thread (e.g. a shared UDP receive loop) would
+    /// otherwise race on `pending`, `challenge_pending`, and related fields, causing
+    /// undefined behaviour including the integer-overflow panic seen in swapRemove.
+    mu: std.Thread.Mutex = .{},
+
     /// UDP socket file descriptor (null when stopped).
     socket: ?std.posix.fd_t = null,
     /// True when this node created and owns the socket (must close on stop/deinit).
@@ -178,7 +185,14 @@ pub const Node = struct {
     /// Advance timers and drain inbound UDP datagrams.
     /// `now_ns` is a monotonic clock reading.
     /// Returns the next deadline the caller should wake at.
+    ///
+    /// Thread-safe: acquires `mu` for the full duration so that concurrent
+    /// calls to `injectDatagram` from another thread do not race on the
+    /// internal `pending` / `challenge_pending` lists.
     pub fn poll(self: *Node, now_ns: u64) u64 {
+        self.mu.lock();
+        defer self.mu.unlock();
+
         self.last_poll_ns = now_ns;
 
         // Receive available datagrams — only when we own the socket.
@@ -238,9 +252,14 @@ pub const Node = struct {
     /// (e.g. a shared UDP socket).  Returns `true` when the datagram was valid
     /// discv5 and has been processed; `false` when it should be forwarded elsewhere
     /// (e.g. to a co-located QUIC endpoint).
+    ///
+    /// Thread-safe: acquires `mu` so this can safely be called from a UDP receive
+    /// thread while `poll` is running concurrently on the drive-loop thread.
     pub fn injectDatagram(self: *Node, data: []const u8, from: std.net.Address) bool {
         var hdr_buf: [packet.static_header_len + 300 + 32]u8 = undefined;
         const pkt = packet.decode(data, self.local_id, &hdr_buf) catch return false;
+        self.mu.lock();
+        defer self.mu.unlock();
         switch (pkt) {
             .ordinary => |o| self.handleOrdinary(o.header, o.auth, o.encrypted_body, from),
             .whoareyou => |w| self.handleWhoareyou(w.header, w.auth, data, from),
