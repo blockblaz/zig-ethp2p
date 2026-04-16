@@ -122,6 +122,7 @@ pub fn decodePreamble(allocator: std.mem.Allocator, buf: []const u8) Malformed!P
             4 => {
                 if (wire != 2) return error.MalformedProtobuf;
                 const b = try decodeBytes(buf, allocator, &off);
+                errdefer allocator.free(b);
                 try hashes.append(allocator, b);
             },
             5 => {
@@ -133,12 +134,21 @@ pub fn decodePreamble(allocator: std.mem.Allocator, buf: []const u8) Malformed!P
         }
     }
 
+    // Materialize owned outputs before the struct literal so that a failure
+    // in the default-hash allocation does not leak the finalized `hashes`.
+    const hashes_owned = try hashes.toOwnedSlice(allocator);
+    errdefer {
+        for (hashes_owned) |h| allocator.free(h);
+        allocator.free(hashes_owned);
+    }
+    const final_hash = hash orelse try allocator.dupe(u8, "");
+
     return .{
         .num_data = num_data,
         .num_parity = num_parity,
         .length = length,
-        .hashes = try hashes.toOwnedSlice(allocator),
-        .hash = hash orelse try allocator.dupe(u8, ""),
+        .hashes = hashes_owned,
+        .hash = final_hash,
     };
 }
 

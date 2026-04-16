@@ -177,7 +177,11 @@ pub fn decodeIHaveOwned(allocator: Allocator, buf: []const u8) (DecodeError || A
                 if (topic != null) return error.BadTag;
                 topic = try allocator.dupe(u8, tl.payload);
             },
-            2 => try ids.append(allocator, try allocator.dupe(u8, tl.payload)),
+            2 => {
+                const copy = try allocator.dupe(u8, tl.payload);
+                errdefer allocator.free(copy);
+                try ids.append(allocator, copy);
+            },
             else => return error.BadTag,
         }
     }
@@ -199,7 +203,9 @@ pub fn decodeIWantOwned(allocator: Allocator, buf: []const u8) (DecodeError || A
     while (offset < buf.len) {
         const tl = try decodeTagLen(buf, &offset);
         if (tl.field != 1) return error.BadTag;
-        try ids.append(allocator, try allocator.dupe(u8, tl.payload));
+        const copy = try allocator.dupe(u8, tl.payload);
+        errdefer allocator.free(copy);
+        try ids.append(allocator, copy);
     }
 
     return .{ .message_ids = try ids.toOwnedSlice(allocator) };
@@ -509,7 +515,9 @@ pub fn decodeControlPruneOwned(allocator: Allocator, buf: []const u8) (DecodeErr
             2 => {
                 if (wire != 2) return error.BadWireType;
                 const pl = try decodeLengthDelimited(buf, &offset);
-                try peer_list.append(allocator, try decodePeerInfoOwned(allocator, pl));
+                var decoded = try decodePeerInfoOwned(allocator, pl);
+                errdefer decoded.deinit(allocator);
+                try peer_list.append(allocator, decoded);
             },
             3 => {
                 if (wire != 0) return error.BadWireType;
@@ -767,12 +775,16 @@ pub fn decodeRpcOwned(allocator: Allocator, buf: []const u8) (DecodeError || All
             1 => {
                 if (wire != 2) return error.BadWireType;
                 const pl = try decodeLengthDelimited(buf, &offset);
-                try subs.append(allocator, try decodeSubOptsOwned(allocator, pl));
+                var decoded = try decodeSubOptsOwned(allocator, pl);
+                errdefer decoded.deinit(allocator);
+                try subs.append(allocator, decoded);
             },
             2 => {
                 if (wire != 2) return error.BadWireType;
                 const pl = try decodeLengthDelimited(buf, &offset);
-                try pubs.append(allocator, try decodeGossipMessageOwned(allocator, pl));
+                var decoded = try decodeGossipMessageOwned(allocator, pl);
+                errdefer decoded.deinit(allocator);
+                try pubs.append(allocator, decoded);
             },
             3 => {
                 if (wire != 2) return error.BadWireType;
