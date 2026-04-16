@@ -569,10 +569,10 @@ pub fn streamMake(conn: *QuicConnection, poll_peer: ?*QuicEndpoint) !*QuicStream
     if (!connHandshakeReady(conn)) return error.HandshakeNotComplete;
     const alloc = conn.ep.allocator.*;
     const sid = if (conn.client) |c| blk: {
-        break :blk io.rawAllocateNextLocalBidiStream(&c.conn);
+        break :blk try io.rawAllocateNextLocalBidiStream(&c.conn);
     } else blk: {
         const cs = conn.connStatePtr() orelse return error.StreamCreateFailed;
-        break :blk io.rawAllocateNextLocalBidiStream(cs);
+        break :blk try io.rawAllocateNextLocalBidiStream(cs);
     };
     const qs = try alloc.create(QuicStream);
     errdefer alloc.destroy(qs);
@@ -602,10 +602,10 @@ pub fn streamMakeUni(conn: *QuicConnection, poll_peer: ?*QuicEndpoint) !*QuicStr
     const qs = try alloc.create(QuicStream);
     errdefer alloc.destroy(qs);
     const sid = if (conn.client) |c| blk: {
-        break :blk io.rawAllocateNextLocalUniStream(&c.conn);
+        break :blk try io.rawAllocateNextLocalUniStream(&c.conn);
     } else blk: {
         const cs = conn.connStatePtr() orelse return error.StreamCreateFailed;
-        break :blk io.rawAllocateNextLocalUniStream(cs);
+        break :blk try io.rawAllocateNextLocalUniStream(cs);
     };
     qs.* = .{
         .conn = conn,
