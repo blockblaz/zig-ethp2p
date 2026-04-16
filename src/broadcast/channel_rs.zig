@@ -84,17 +84,18 @@ pub const ChannelRs = struct {
 
         const n = self.members.items.len;
         const member_ids = try self.allocator.alloc([]u8, n);
+        var populated: usize = 0;
         errdefer {
-            for (member_ids) |m| self.allocator.free(m);
+            for (member_ids[0..populated]) |m| self.allocator.free(m);
             self.allocator.free(member_ids);
         }
         const stats = try self.allocator.alloc(broadcast_types.PeerSessionStats, n);
         errdefer self.allocator.free(stats);
 
-        for (0..n) |i| {
-            member_ids[i] = try self.allocator.dupe(u8, self.members.items[i]);
-            stats[i] = .{ .peer_id = member_ids[i] };
-            try strat.?.attachPeer(member_ids[i], &stats[i]);
+        while (populated < n) : (populated += 1) {
+            member_ids[populated] = try self.allocator.dupe(u8, self.members.items[populated]);
+            stats[populated] = .{ .peer_id = member_ids[populated] };
+            try strat.?.attachPeer(member_ids[populated], &stats[populated]);
         }
 
         const sess = try self.allocator.create(SessionRs);
@@ -126,17 +127,18 @@ pub const ChannelRs = struct {
 
         const n = self.members.items.len;
         const member_ids = try self.allocator.alloc([]u8, n);
+        var populated: usize = 0;
         errdefer {
-            for (member_ids) |m| self.allocator.free(m);
+            for (member_ids[0..populated]) |m| self.allocator.free(m);
             self.allocator.free(member_ids);
         }
         const stats = try self.allocator.alloc(broadcast_types.PeerSessionStats, n);
         errdefer self.allocator.free(stats);
 
-        for (0..n) |i| {
-            member_ids[i] = try self.allocator.dupe(u8, self.members.items[i]);
-            stats[i] = .{ .peer_id = member_ids[i] };
-            try strat.attachPeer(member_ids[i], &stats[i]);
+        while (populated < n) : (populated += 1) {
+            member_ids[populated] = try self.allocator.dupe(u8, self.members.items[populated]);
+            stats[populated] = .{ .peer_id = member_ids[populated] };
+            try strat.attachPeer(member_ids[populated], &stats[populated]);
         }
 
         const sess = try self.allocator.create(SessionRs);

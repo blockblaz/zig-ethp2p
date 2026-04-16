@@ -575,6 +575,7 @@ pub fn streamMake(conn: *QuicConnection, poll_peer: ?*QuicEndpoint) !*QuicStream
         break :blk io.rawAllocateNextLocalBidiStream(cs);
     };
     const qs = try alloc.create(QuicStream);
+    errdefer alloc.destroy(qs);
     qs.* = .{
         .conn = conn,
         .stream_id = sid,
@@ -583,6 +584,7 @@ pub fn streamMake(conn: *QuicConnection, poll_peer: ?*QuicEndpoint) !*QuicStream
         .write_off = 0,
         .is_incoming = false,
     };
+    errdefer qs.deinit();
     try conn.streams_owned.append(alloc, qs);
     var i: u32 = 0;
     while (i < 100) : (i += 1) {
@@ -598,6 +600,7 @@ pub fn streamMakeUni(conn: *QuicConnection, poll_peer: ?*QuicEndpoint) !*QuicStr
     if (!connHandshakeReady(conn)) return error.HandshakeNotComplete;
     const alloc = conn.ep.allocator.*;
     const qs = try alloc.create(QuicStream);
+    errdefer alloc.destroy(qs);
     const sid = if (conn.client) |c| blk: {
         break :blk io.rawAllocateNextLocalUniStream(&c.conn);
     } else blk: {
@@ -613,6 +616,7 @@ pub fn streamMakeUni(conn: *QuicConnection, poll_peer: ?*QuicEndpoint) !*QuicStr
         .stream_send_off = 0,
         .is_incoming = false,
     };
+    errdefer qs.deinit();
     try conn.streams_owned.append(alloc, qs);
     var i: u32 = 0;
     while (i < 100) : (i += 1) {

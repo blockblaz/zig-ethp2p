@@ -318,6 +318,20 @@ pub fn rlpEncodeList(allocator: std.mem.Allocator, items: []const []const u8) st
 // ENR encode + sign  (EIP-778 §4, v4 identity scheme)
 // ---------------------------------------------------------------------------
 
+/// Append `buf` (already owned by the caller) to `items`, freeing `buf` on
+/// allocation failure so the outer `try append(alloc, try alloc...())` pattern
+/// does not leak the freshly encoded slice if the list grow fails.
+fn appendOwnedItem(
+    items: *std.ArrayListUnmanaged([]u8),
+    allocator: std.mem.Allocator,
+    buf: []u8,
+) std.mem.Allocator.Error!void {
+    items.append(allocator, buf) catch |err| {
+        allocator.free(buf);
+        return err;
+    };
+}
+
 /// Builder for assembling a signed ENR.
 ///
 /// Pairs must be added in lexicographic key order (the caller is responsible
@@ -361,10 +375,10 @@ pub const EnrBuilder = struct {
             items.deinit(self.allocator);
         }
 
-        try items.append(self.allocator, try rlpEncodeUint64(self.allocator, self.seq));
+        try appendOwnedItem(&items, self.allocator, try rlpEncodeUint64(self.allocator, self.seq));
         for (self.pairs.items) |kv| {
-            try items.append(self.allocator, try rlpEncodeString(self.allocator, kv.key));
-            try items.append(self.allocator, try self.allocator.dupe(u8, kv.value_raw));
+            try appendOwnedItem(&items, self.allocator, try rlpEncodeString(self.allocator, kv.key));
+            try appendOwnedItem(&items, self.allocator, try self.allocator.dupe(u8, kv.value_raw));
         }
         return rlpEncodeList(self.allocator, @ptrCast(items.items));
     }
@@ -388,11 +402,11 @@ pub const EnrBuilder = struct {
             items.deinit(self.allocator);
         }
 
-        try items.append(self.allocator, try rlpEncodeString(self.allocator, &sig));
-        try items.append(self.allocator, try rlpEncodeUint64(self.allocator, self.seq));
+        try appendOwnedItem(&items, self.allocator, try rlpEncodeString(self.allocator, &sig));
+        try appendOwnedItem(&items, self.allocator, try rlpEncodeUint64(self.allocator, self.seq));
         for (self.pairs.items) |kv| {
-            try items.append(self.allocator, try rlpEncodeString(self.allocator, kv.key));
-            try items.append(self.allocator, try self.allocator.dupe(u8, kv.value_raw));
+            try appendOwnedItem(&items, self.allocator, try rlpEncodeString(self.allocator, kv.key));
+            try appendOwnedItem(&items, self.allocator, try self.allocator.dupe(u8, kv.value_raw));
         }
 
         const record = try rlpEncodeList(self.allocator, @ptrCast(items.items));

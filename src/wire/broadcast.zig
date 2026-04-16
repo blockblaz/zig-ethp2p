@@ -264,17 +264,26 @@ pub fn decodeBcast(allocator: std.mem.Allocator, buf: []const u8) Malformed!Bcas
         const inner = try decodeBytes(buf, allocator, &off);
         switch (field) {
             1 => {
-                if (which != null) return error.MalformedProtobuf;
+                if (which != null) {
+                    allocator.free(inner);
+                    return error.MalformedProtobuf;
+                }
                 which = .h;
                 payload = inner;
             },
             2 => {
-                if (which != null) return error.MalformedProtobuf;
+                if (which != null) {
+                    allocator.free(inner);
+                    return error.MalformedProtobuf;
+                }
                 which = .s;
                 payload = inner;
             },
             3 => {
-                if (which != null) return error.MalformedProtobuf;
+                if (which != null) {
+                    allocator.free(inner);
+                    return error.MalformedProtobuf;
+                }
                 which = .u;
                 payload = inner;
             },
@@ -424,12 +433,18 @@ pub fn decodeSess(allocator: std.mem.Allocator, buf: []const u8) Malformed!SessO
         const inner = try decodeBytes(buf, allocator, &off);
         switch (field) {
             1 => {
-                if (which != null) return error.MalformedProtobuf;
+                if (which != null) {
+                    allocator.free(inner);
+                    return error.MalformedProtobuf;
+                }
                 which = .open;
                 payload = inner;
             },
             2 => {
-                if (which != null) return error.MalformedProtobuf;
+                if (which != null) {
+                    allocator.free(inner);
+                    return error.MalformedProtobuf;
+                }
                 which = .upd;
                 payload = inner;
             },

@@ -108,6 +108,19 @@ fn encodeReqId(allocator: std.mem.Allocator, id: u64) EncodeError![]u8 {
     return rlpEncodeUint64(allocator, id);
 }
 
+/// Append `buf` to `items`, freeing `buf` on allocation failure so the caller's
+/// nested-try expression cannot leak the freshly encoded slice.
+fn appendOwned(
+    items: *std.ArrayListUnmanaged([]u8),
+    allocator: std.mem.Allocator,
+    buf: []u8,
+) std.mem.Allocator.Error!void {
+    items.append(allocator, buf) catch |err| {
+        allocator.free(buf);
+        return err;
+    };
+}
+
 /// Decode a request-id from an RLP item (variable-length integer).
 fn decodeReqId(item: []const u8) DecodeError!u64 {
     const bytes = try rlpStringValue(item);
@@ -127,8 +140,8 @@ pub fn encodePing(allocator: std.mem.Allocator, msg: Ping) EncodeError![]u8 {
         items.deinit(allocator);
     }
 
-    try items.append(allocator, try encodeReqId(allocator, msg.request_id));
-    try items.append(allocator, try rlpEncodeUint64(allocator, msg.enr_seq));
+    try appendOwned(&items, allocator, try encodeReqId(allocator, msg.request_id));
+    try appendOwned(&items, allocator, try rlpEncodeUint64(allocator, msg.enr_seq));
 
     const body = try rlpEncodeList(allocator, @ptrCast(items.items));
     defer allocator.free(body);
@@ -166,10 +179,10 @@ pub fn encodePong(allocator: std.mem.Allocator, msg: Pong) EncodeError![]u8 {
         items.deinit(allocator);
     }
 
-    try items.append(allocator, try encodeReqId(allocator, msg.request_id));
-    try items.append(allocator, try rlpEncodeUint64(allocator, msg.enr_seq));
-    try items.append(allocator, try rlpEncodeString(allocator, msg.recipient_ip[0..msg.ip_len]));
-    try items.append(allocator, try rlpEncodeUint64(allocator, msg.recipient_port));
+    try appendOwned(&items, allocator, try encodeReqId(allocator, msg.request_id));
+    try appendOwned(&items, allocator, try rlpEncodeUint64(allocator, msg.enr_seq));
+    try appendOwned(&items, allocator, try rlpEncodeString(allocator, msg.recipient_ip[0..msg.ip_len]));
+    try appendOwned(&items, allocator, try rlpEncodeUint64(allocator, msg.recipient_port));
 
     const body = try rlpEncodeList(allocator, @ptrCast(items.items));
     defer allocator.free(body);
@@ -219,7 +232,7 @@ pub fn encodeFindNode(allocator: std.mem.Allocator, msg: FindNode) EncodeError![
         items.deinit(allocator);
     }
 
-    try items.append(allocator, try encodeReqId(allocator, msg.request_id));
+    try appendOwned(&items, allocator, try encodeReqId(allocator, msg.request_id));
 
     // distances is a list of u8 values.
     var dist_items = std.ArrayListUnmanaged([]u8){};
@@ -228,9 +241,9 @@ pub fn encodeFindNode(allocator: std.mem.Allocator, msg: FindNode) EncodeError![
         dist_items.deinit(allocator);
     }
     for (msg.distances) |d| {
-        try dist_items.append(allocator, try rlpEncodeUint64(allocator, d));
+        try appendOwned(&dist_items, allocator, try rlpEncodeUint64(allocator, d));
     }
-    try items.append(allocator, try rlpEncodeList(allocator, @ptrCast(dist_items.items)));
+    try appendOwned(&items, allocator, try rlpEncodeList(allocator, @ptrCast(dist_items.items)));
 
     const body = try rlpEncodeList(allocator, @ptrCast(items.items));
     defer allocator.free(body);
@@ -252,11 +265,12 @@ pub fn decodeFindNode(allocator: std.mem.Allocator, data: []const u8) (DecodeErr
     const dists_payload = try enr_mod.rlpListPayload(dists_item.item);
 
     var dist_list = std.ArrayListUnmanaged(u8){};
+    errdefer dist_list.deinit(allocator);
     var dr = dists_payload;
     while (dr.len > 0) {
         const d_item = try rlpDecode(dr);
         dr = d_item.rest;
-        dist_list.append(allocator, @intCast(try decodeReqId(d_item.item))) catch return error.OutOfMemory;
+        try dist_list.append(allocator, @intCast(try decodeReqId(d_item.item)));
     }
 
     return .{
@@ -280,8 +294,8 @@ pub fn encodeNodes(allocator: std.mem.Allocator, msg: Nodes) EncodeError![]u8 {
         items.deinit(allocator);
     }
 
-    try items.append(allocator, try encodeReqId(allocator, msg.request_id));
-    try items.append(allocator, try rlpEncodeUint64(allocator, msg.total));
+    try appendOwned(&items, allocator, try encodeReqId(allocator, msg.request_id));
+    try appendOwned(&items, allocator, try rlpEncodeUint64(allocator, msg.total));
 
     var enr_items = std.ArrayListUnmanaged([]u8){};
     defer {
@@ -289,9 +303,9 @@ pub fn encodeNodes(allocator: std.mem.Allocator, msg: Nodes) EncodeError![]u8 {
         enr_items.deinit(allocator);
     }
     for (msg.enrs) |enr_bytes| {
-        try enr_items.append(allocator, try allocator.dupe(u8, enr_bytes));
+        try appendOwned(&enr_items, allocator, try allocator.dupe(u8, enr_bytes));
     }
-    try items.append(allocator, try rlpEncodeList(allocator, @ptrCast(enr_items.items)));
+    try appendOwned(&items, allocator, try rlpEncodeList(allocator, @ptrCast(enr_items.items)));
 
     const body = try rlpEncodeList(allocator, @ptrCast(items.items));
     defer allocator.free(body);
@@ -315,14 +329,18 @@ pub fn decodeNodes(allocator: std.mem.Allocator, data: []const u8) (DecodeError 
     const enrs_payload = try enr_mod.rlpListPayload(enrs_item.item);
 
     var enr_list = std.ArrayListUnmanaged([]const u8){};
+    errdefer {
+        for (enr_list.items) |e| allocator.free(e);
+        enr_list.deinit(allocator);
+    }
     var er = enrs_payload;
     while (er.len > 0) {
         const e = try rlpDecode(er);
         er = e.rest;
         const copy = try allocator.dupe(u8, e.item);
-        enr_list.append(allocator, copy) catch {
+        enr_list.append(allocator, copy) catch |err| {
             allocator.free(copy);
-            return error.OutOfMemory;
+            return err;
         };
     }
 
@@ -349,9 +367,9 @@ pub fn encodeTalkReq(allocator: std.mem.Allocator, msg: TalkReq) EncodeError![]u
         items.deinit(allocator);
     }
 
-    try items.append(allocator, try encodeReqId(allocator, msg.request_id));
-    try items.append(allocator, try rlpEncodeString(allocator, msg.protocol));
-    try items.append(allocator, try rlpEncodeString(allocator, msg.payload));
+    try appendOwned(&items, allocator, try encodeReqId(allocator, msg.request_id));
+    try appendOwned(&items, allocator, try rlpEncodeString(allocator, msg.protocol));
+    try appendOwned(&items, allocator, try rlpEncodeString(allocator, msg.payload));
 
     const body = try rlpEncodeList(allocator, @ptrCast(items.items));
     defer allocator.free(body);
@@ -396,8 +414,8 @@ pub fn encodeTalkRes(allocator: std.mem.Allocator, msg: TalkRes) EncodeError![]u
         items.deinit(allocator);
     }
 
-    try items.append(allocator, try encodeReqId(allocator, msg.request_id));
-    try items.append(allocator, try rlpEncodeString(allocator, msg.payload));
+    try appendOwned(&items, allocator, try encodeReqId(allocator, msg.request_id));
+    try appendOwned(&items, allocator, try rlpEncodeString(allocator, msg.payload));
 
     const body = try rlpEncodeList(allocator, @ptrCast(items.items));
     defer allocator.free(body);
