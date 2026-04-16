@@ -90,7 +90,7 @@ All ethp2p application protocols use UNI streams — both peers independently op
 
 ## Pending work
 
-- **Outbound chunk path:** origin `ChannelRs` publish/drain over QUIC (sending CHUNK streams to peers) is not wired yet; inbound relay via `EngineQuicHost` is implemented (#37).
+- **Outbound chunk path:** use `broadcast.engine_quic.peerSendRsChunk` with `ChannelRs.sessionDrainOutboundOverQuic` / `SessionRs.drainOutboundOverQuic` (integration test in `eth_ec_quic_enabled.zig`). Inbound relay via `EngineQuicHost` is implemented (#37).
 - **Erasure coding:** **RLNC** (strategy, preamble, chunk layout) and any further `Scheme` types beyond Reed–Solomon ([#14](https://github.com/ch4r10t33r/zig-ethp2p/issues/14)).
 - **libp2p:** Noise handshake, multistream-select, Yamux, identify — handled by zeam's rust-libp2p layer; out of scope for this repo.
 

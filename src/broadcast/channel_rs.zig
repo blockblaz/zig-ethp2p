@@ -8,9 +8,12 @@ const std = @import("std");
 const broadcast_types = @import("../layer/broadcast_types.zig");
 const dedup_mod = @import("../layer/dedup.zig");
 const dedup_registry_mod = @import("../layer/dedup_registry.zig");
+const emit_planner = @import("../layer/emit_planner.zig");
 const rs_init = @import("../layer/rs_init.zig");
 const rs_strategy = @import("../layer/rs_strategy.zig");
 const Engine = @import("engine.zig").Engine;
+const errors = @import("errors.zig");
+const SendRsChunkFn = @import("session_rs.zig").SendRsChunkFn;
 const SessionRs = @import("session_rs.zig").SessionRs;
 
 const Allocator = std.mem.Allocator;
@@ -71,7 +74,7 @@ pub const ChannelRs = struct {
 
     /// Origin session: encodes `payload` and attaches current members.
     pub fn publish(self: *ChannelRs, message_id: []const u8, payload: []const u8) !void {
-        if (self.sessions.get(message_id) != null) return error.DuplicateMessage;
+        if (self.sessions.get(message_id) != null) return error.InvalidMessage;
 
         const mid = try self.allocator.dupe(u8, message_id);
         errdefer self.allocator.free(mid);
@@ -113,7 +116,7 @@ pub const ChannelRs = struct {
 
     /// Relay-side session for an existing preamble (same members as `publish`).
     pub fn attachRelaySession(self: *ChannelRs, message_id: []const u8, preamble: *const rs_strategy.RsPreamble) !void {
-        if (self.sessions.get(message_id) != null) return error.DuplicateMessage;
+        if (self.sessions.get(message_id) != null) return error.InvalidMessage;
 
         const mid = try self.allocator.dupe(u8, message_id);
         errdefer self.allocator.free(mid);
@@ -153,12 +156,23 @@ pub const ChannelRs = struct {
     }
 
     pub fn sessionDrainOutbound(self: *ChannelRs, message_id: []const u8) !usize {
-        const slot = self.sessions.getPtr(message_id) orelse return error.UnknownMessage;
+        const slot = self.sessions.getPtr(message_id) orelse return error.InvalidMessage;
         return slot.*.drainOutbound();
     }
 
+    /// Same as [`SessionRs.drainOutboundOverQuic`](`SessionRs.drainOutboundOverQuic`) for `message_id` on this channel.
+    pub fn sessionDrainOutboundOverQuic(
+        self: *ChannelRs,
+        message_id: []const u8,
+        ctx: *anyopaque,
+        send_chunk: SendRsChunkFn,
+    ) (Allocator.Error || emit_planner.PlannerError || anyerror)!usize {
+        const slot = self.sessions.getPtr(message_id) orelse return error.InvalidMessage;
+        return slot.*.drainOutboundOverQuic(self.id, ctx, send_chunk);
+    }
+
     pub fn sessionDecode(self: *ChannelRs, message_id: []const u8) ![]u8 {
-        const slot = self.sessions.getPtr(message_id) orelse return error.UnknownMessage;
+        const slot = self.sessions.getPtr(message_id) orelse return error.InvalidMessage;
         return slot.*.strategy.decode();
     }
 
@@ -186,8 +200,8 @@ pub const ChannelRs = struct {
         chunk_id: rs_strategy.ChunkIdent,
         data: []const u8,
         dedup: ?*broadcast_types.DedupCancel,
-    ) (Allocator.Error || error{UnknownMessage})!broadcast_types.ChunkIngestResult {
-        const strat = self.sessionStrategy(message_id) orelse return error.UnknownMessage;
+    ) (Allocator.Error || errors.Error)!broadcast_types.ChunkIngestResult {
+        const strat = self.sessionStrategy(message_id) orelse return error.InvalidMessage;
         if (registry) |reg| {
             const first = try reg.claim(self.allocator, self.id, message_id, chunk_id.index);
             if (!first) {
@@ -205,7 +219,7 @@ pub const ChannelRs = struct {
         chunk_id: rs_strategy.ChunkIdent,
         data: []const u8,
         dedup: ?*broadcast_types.DedupCancel,
-    ) (Allocator.Error || error{UnknownMessage})!broadcast_types.ChunkIngestResult {
+    ) (Allocator.Error || errors.Error)!broadcast_types.ChunkIngestResult {
         return self.relayIngestChunk(self.engine.dedupRegistryPtr(), message_id, peer, chunk_id, data, dedup);
     }
 
@@ -218,8 +232,8 @@ pub const ChannelRs = struct {
         chunk_id: rs_strategy.ChunkIdent,
         data: []const u8,
         dedup: ?*broadcast_types.DedupCancel,
-    ) (Allocator.Error || error{UnknownMessage})!broadcast_types.ChunkIngestResult {
-        const strat = self.sessionStrategy(message_id) orelse return error.UnknownMessage;
+    ) (Allocator.Error || errors.Error)!broadcast_types.ChunkIngestResult {
+        const strat = self.sessionStrategy(message_id) orelse return error.InvalidMessage;
         const v = strat.verifyChunk(chunk_id, data);
         if (v != .accepted) {
             return .{ .verdict = v, .complete = false };
@@ -235,7 +249,7 @@ pub const ChannelRs = struct {
         chunk_id: rs_strategy.ChunkIdent,
         data: []const u8,
         dedup: ?*broadcast_types.DedupCancel,
-    ) (Allocator.Error || error{UnknownMessage})!broadcast_types.ChunkIngestResult {
+    ) (Allocator.Error || errors.Error)!broadcast_types.ChunkIngestResult {
         return self.relayIngestChunkVerified(self.engine.dedupRegistryPtr(), message_id, peer, chunk_id, data, dedup);
     }
 };
@@ -323,7 +337,7 @@ test "relayIngestChunk unknown message" {
 
     const ch = try eng.attachChannelRs("topic", cfg);
     try std.testing.expectError(
-        error.UnknownMessage,
+        error.InvalidMessage,
         ch.relayIngestChunk(eng.dedupRegistryPtr(), "missing", "peer", .{ .index = 0 }, &.{}, null),
     );
 }

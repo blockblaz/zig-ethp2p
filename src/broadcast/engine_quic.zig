@@ -1,13 +1,15 @@
-//! Wire `transport/eth_ec_quic_peer.zig` `PeerConn` inbound SESS/CHUNK streams into
-//! `broadcast/engine.zig` `Engine` / `ChannelRs` (issue #37).
+//! Wire `transport/eth_ec_quic_peer.zig` `PeerConn` to `Engine` / `ChannelRs`:
+//! - **Inbound:** SESS/CHUNK into relay ingest (#37).
+//! - **Outbound:** `peerSendRsChunk` sends origin RS shards on new CHUNK UNI streams; pair with
+//!   `SessionRs.drainOutboundOverQuic` / `ChannelRs.sessionDrainOutboundOverQuic`.
 //!
 //! After TLS + BCAST handshake, call `wireEngine`, then `finishBcastHandshakeRead`
 //! to capture the peer id. Drive `quic.poll` on both endpoints, then `PeerConn.drive`
-//! (via `engineQuicDrive`) so inbound SESS opens relay sessions and CHUNK frames
-//! call `relayIngestChunkVerifiedEngine`.
+//! so inbound SESS opens relay sessions and CHUNK frames call `relayIngestChunkVerifiedEngine`.
 
 const std = @import("std");
 const quic = @import("quic");
+const errors = @import("errors.zig");
 const peer_mod = @import("../transport/eth_ec_quic_peer.zig");
 const Engine = @import("engine.zig").Engine;
 const rs_strategy = @import("../layer/rs_strategy.zig");
@@ -142,7 +144,7 @@ fn handleSessStream(host: *EngineQuicHost, st: *quic.QuicStream) !void {
     var rs_pre = try preambleOwnedToRs(host.allocator, preamble_owned);
     errdefer rs_pre.deinit(host.allocator);
 
-    const ch = host.engine.channelRs(open.channel) orelse return error.UnknownChannel;
+    const ch = host.engine.channelRs(open.channel) orelse return error.ChannelNotFound;
     try ch.attachRelaySession(open.message_id, &rs_pre);
     rs_pre.deinit(host.allocator);
 }
@@ -156,7 +158,7 @@ fn handleChunkStream(host: *EngineQuicHost, st: *quic.QuicStream) !void {
     var chunk_in = try chunk_stream.readChunkStream(host.allocator, fbs.reader());
     defer chunk_in.deinit(host.allocator);
 
-    const ch = host.engine.channelRs(chunk_in.header.channel) orelse return error.UnknownChannel;
+    const ch = host.engine.channelRs(chunk_in.header.channel) orelse return error.ChannelNotFound;
 
     const ident = try wire_rs.decodeChunkIdent(host.allocator, chunk_in.header.chunk_id);
 
@@ -201,4 +203,26 @@ fn drainUniStream(
         return try allocator.dupe(u8, quic.streamReadSlice(st));
     }
     return error.StreamDrainTimeout;
+}
+
+/// Open a new outbound UNI stream and write one RS shard CHUNK (`wire/chunk_stream.writeRsShardChunk`).
+/// `poll_peer` is the remote QUIC endpoint to co-poll (same as other `eth_ec_quic_enabled` tests).
+pub fn peerSendRsChunk(
+    pc: *PeerConn,
+    poll_peer: ?*quic.QuicEndpoint,
+    channel_id: []const u8,
+    message_id: []const u8,
+    shard_index: i32,
+    payload: []const u8,
+) (std.mem.Allocator.Error || errors.Error)!void {
+    const st = quic.streamMakeUni(pc.conn, poll_peer) catch return error.ChunkWriteFail;
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(pc.allocator);
+    {
+        const w = buf.writer(pc.allocator);
+        chunk_stream.writeRsShardChunk(w, pc.allocator, channel_id, message_id, shard_index, payload) catch return error.ChunkMarshal;
+    }
+    try quic.streamQueueWrite(st, buf.items);
+    const peer_ep = poll_peer orelse pc.ep;
+    quic.streamDrainWrites(st, peer_ep, 10_000) catch return error.ChunkWriteFail;
 }

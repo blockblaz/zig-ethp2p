@@ -15,6 +15,7 @@ test {
     _ = @import("layer/rs_strategy.zig");
     _ = @import("layer/verify_queue.zig");
     _ = @import("layer/verify_workers.zig");
+    _ = @import("broadcast/errors.zig");
     _ = @import("broadcast/observer.zig");
     _ = @import("broadcast/engine.zig");
     _ = @import("broadcast/channel_rs.zig");
