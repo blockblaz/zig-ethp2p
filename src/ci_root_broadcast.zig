@@ -22,4 +22,5 @@ test {
     _ = @import("broadcast/session_rs.zig");
     _ = @import("broadcast/gossip.zig");
     _ = @import("broadcast/relay_async_verify.zig");
+    _ = @import("broadcast/events.zig");
 }
