@@ -12,6 +12,7 @@ const rs_strategy = @import("../layer/rs_strategy.zig");
 const verify_queue_mod = @import("../layer/verify_queue.zig");
 const verify_workers_mod = @import("../layer/verify_workers.zig");
 const ChannelRs = @import("channel_rs.zig").ChannelRs;
+const errors = @import("errors.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -33,8 +34,7 @@ pub const RelayAsyncVerifier = struct {
         dedup: ?*broadcast_types.DedupCancel,
     };
 
-    pub const Error = Allocator.Error || error{
-        UnknownMessage,
+    pub const Error = Allocator.Error || errors.Error || error{
         InvalidChunkIndex,
         OrphanVerifyRecord,
         SystemResources,
@@ -106,7 +106,7 @@ pub const RelayAsyncVerifier = struct {
         data: []const u8,
         dedup: ?*broadcast_types.DedupCancel,
     ) Error!void {
-        const strat = self.channel.sessionStrategy(message_id) orelse return error.UnknownMessage;
+        const strat = self.channel.sessionStrategy(message_id) orelse return error.InvalidMessage;
         const idx_i = chunk_id.index;
         if (idx_i < 0) return error.InvalidChunkIndex;
         const idx: usize = @intCast(idx_i);
@@ -159,7 +159,7 @@ pub const RelayAsyncVerifier = struct {
         data: []const u8,
         dedup: ?*broadcast_types.DedupCancel,
     ) Error!void {
-        const strat = self.channel.sessionStrategy(message_id) orelse return error.UnknownMessage;
+        const strat = self.channel.sessionStrategy(message_id) orelse return error.InvalidMessage;
         const idx_i = chunk_id.index;
         if (idx_i < 0) return error.InvalidChunkIndex;
         const idx: usize = @intCast(idx_i);

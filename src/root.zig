@@ -47,6 +47,7 @@ pub const transport = struct {
 };
 
 pub const broadcast = struct {
+    pub const errors = @import("broadcast/errors.zig");
     pub const observer = @import("broadcast/observer.zig");
     pub const engine = @import("broadcast/engine.zig");
     pub const engine_quic = @import("broadcast/engine_quic.zig");
@@ -73,6 +74,7 @@ test {
     _ = sim.gossipsub_interop;
     _ = sim.gossipsub_rpc_pb;
     _ = sim.gossipsub_rpc_host;
+    _ = broadcast.errors;
     _ = broadcast.engine;
     _ = broadcast.channel_rs;
     _ = broadcast.session_rs;

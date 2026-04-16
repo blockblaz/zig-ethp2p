@@ -3,9 +3,12 @@
 const std = @import("std");
 const ChannelRs = @import("channel_rs.zig").ChannelRs;
 const dedup_registry_mod = @import("../layer/dedup_registry.zig");
+const errors = @import("errors.zig");
 const observer_mod = @import("observer.zig");
 
 const Allocator = std.mem.Allocator;
+
+pub const Error = errors.Error;
 
 pub const EngineConfig = struct {
     observer: observer_mod.Observer = .{},
@@ -64,7 +67,7 @@ pub const Engine = struct {
         self: *Engine,
         channel_id: []const u8,
         cfg: @import("../layer/rs_init.zig").RsConfig,
-    ) !*ChannelRs {
+    ) (Allocator.Error || Error)!*ChannelRs {
         if (self.channels.get(channel_id) != null) return error.ChannelExists;
         const key = try self.allocator.dupe(u8, channel_id);
         errdefer self.allocator.free(key);
@@ -80,5 +83,3 @@ pub const Engine = struct {
         return self.channels.get(channel_id);
     }
 };
-
-pub const Error = error{ChannelExists};
