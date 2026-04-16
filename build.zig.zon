@@ -15,8 +15,8 @@
     },
     .dependencies = .{
         .zquic = .{
-            .url = "https://github.com/ch4r10t33r/zquic/archive/refs/tags/v1.2.1.tar.gz",
-            .hash = "zquic-1.2.1-2zRc1AFCDwCgM1eFokgQYN4SnVIaeLzs5rSMwL1Nm8-Y",
+            .url = "https://github.com/ch4r10t33r/zquic/archive/refs/tags/v1.5.0.tar.gz",
+            .hash = "zquic-1.5.0-2zRc1LynDwAh1rU4KzmEmuSY9WKDP7qNgz7e8xI09uXn",
         },
     },
 }
