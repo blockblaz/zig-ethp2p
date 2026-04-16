@@ -55,6 +55,7 @@ pub const broadcast = struct {
     pub const session_rs = @import("broadcast/session_rs.zig");
     pub const gossip = @import("broadcast/gossip.zig");
     pub const relay_async_verify = @import("broadcast/relay_async_verify.zig");
+    pub const events = @import("broadcast/events.zig");
 };
 
 test {
@@ -82,5 +83,6 @@ test {
     _ = broadcast.gossip;
     _ = broadcast.relay_async_verify;
     _ = broadcast.engine_quic;
+    _ = broadcast.events;
     _ = discovery;
 }
