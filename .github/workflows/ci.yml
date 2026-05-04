@@ -1,4 +1,5 @@
 # Parity with https://github.com/ethp2p/ethp2p/blob/main/.github/workflows/ci.yml (job names and intent).
+# - markdown-lint: rumdl on ethp2p `specs/` at ETHP2P_SPECS_REF (second checkout; no specs/ in this repo).
 # - lint: go vet/staticcheck → zig fmt, default build, zig ast-check (syntax only; not staticcheck).
 # - unit-tests: go test -race ./broadcast/... → zig build test-broadcast (Debug + TSan ≈ -race).
 # - simnet-rs: filtered sim RS + reconnection → zig build test-sim-rs (no Zig reconnection test yet).
@@ -17,8 +18,25 @@ on:
 
 env:
   ZIG_VERSION: 0.15.1
+  # Normative prose under ethp2p `specs/`; keep in sync with `UPSTREAM.md` "Pinned revision".
+  ETHP2P_SPECS_REF: 741d8d9cf682ff93b7d8eb56e0377ba8eea83a7e
 
 jobs:
+  markdown-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ethp2p/ethp2p
+          ref: ${{ env.ETHP2P_SPECS_REF }}
+          path: ethp2p
+
+      - name: Lint ethp2p specs (rumdl)
+        uses: rvben/rumdl@v0
+        with:
+          path: ethp2p/specs/
+          report-type: annotations
+
   lint:
     runs-on: ubuntu-latest
     steps:
