@@ -27,9 +27,17 @@ The only items excluded from like-for-like porting are those that depend on Go/l
 
 The vendored `.proto` files and golden test vectors were checked against reference commit:
 
-`db6e9417d0bbab9ded28aa3053211cdecff402ac`
+`741d8d9cf682ff93b7d8eb56e0377ba8eea83a7e`
 
-Changes since the previous pin (`125bdaa`):
+Changes since the previous pin (`db6e9417d0bbab9ded28aa3053211cdecff402ac`):
+
+- `741d8d9`: documentation and CI only — [rumdl](https://rumdl.dev/) markdown lint for `specs/`
+  (SLEAC / semantic line breaks in `.rumdl.toml`), new `markdown-lint` job in
+  `.github/workflows/ci.yml`, `just specs` installs rumdl and runs `rumdl fmt specs/`.
+  **No** changes under `broadcast/`, `protocol/`, `sim/`, or vendored protobufs; Zig wire
+  and golden vectors unchanged.
+
+Changes since the previous pin (`125bdaa` → `db6e941`):
 
 - `sim/strategy_gossipsub.go` (`db6e941`): gossipsub params aligned with Prysm
   (`beacon-chain/p2p/pubsub.go`).

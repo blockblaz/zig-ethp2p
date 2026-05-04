@@ -2,6 +2,9 @@
 # Reference: https://github.com/ethp2p/ethp2p/blob/main/justfile
 # Requires: https://github.com/casey/just
 
+# ethp2p commit for normative `specs/` (rumdl); must match `.github/workflows/ci.yml` ETHP2P_SPECS_REF and `UPSTREAM.md` pinned revision.
+ETHP2P_SPECS_REF := "741d8d9cf682ff93b7d8eb56e0377ba8eea83a7e"
+
 default:
     @just --list
 
@@ -44,6 +47,22 @@ fmt:
 
 fmt-check:
     zig fmt --check .
+
+# Clone ethp2p at ETHP2P_SPECS_REF and run rumdl on its specs/ (parity with ethp2p CI `markdown-lint`). Requires: git, rumdl (`uv tool install rumdl`).
+specs-lint:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ref="{{ETHP2P_SPECS_REF}}"
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    git clone --filter=blob:none --quiet "https://github.com/ethp2p/ethp2p.git" "$tmp/ethp2p"
+    git -C "$tmp/ethp2p" fetch --depth 1 origin "$ref"
+    git -C "$tmp/ethp2p" checkout -q FETCH_HEAD
+    if ! command -v rumdl >/dev/null 2>&1; then
+      echo "rumdl not found; install with: uv tool install rumdl" >&2
+      exit 1
+    fi
+    rumdl check "$tmp/ethp2p/specs/"
 
 # Same assertion as CI: parse ZIG_VERSION from the workflow file and compare to build.zig.zon.
 check-zig-ci-align:
