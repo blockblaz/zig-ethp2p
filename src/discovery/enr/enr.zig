@@ -236,7 +236,7 @@ pub fn decode(allocator: std.mem.Allocator, raw: []const u8) (EnrError || std.me
     for (seq_bytes) |b| seq = (seq << 8) | b;
 
     // Remaining items: key-value pairs.
-    var pairs = std.ArrayListUnmanaged(KvPair){};
+    var pairs = std.ArrayListUnmanaged(KvPair).empty;
     errdefer {
         for (pairs.items) |*kv| {
             allocator.free(kv.key);
@@ -298,7 +298,7 @@ pub fn rlpEncodeList(allocator: std.mem.Allocator, items: []const []const u8) st
     var payload_len: usize = 0;
     for (items) |it| payload_len += it.len;
 
-    var out = std.ArrayListUnmanaged(u8){};
+    var out = std.ArrayListUnmanaged(u8).empty;
     defer out.deinit(allocator);
 
     if (payload_len <= 55) {
@@ -339,7 +339,7 @@ fn appendOwnedItem(
 pub const EnrBuilder = struct {
     allocator: std.mem.Allocator,
     seq: Seq,
-    pairs: std.ArrayListUnmanaged(KvPair) = .{},
+    pairs: std.ArrayListUnmanaged(KvPair) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, seq: Seq) EnrBuilder {
         return .{ .allocator = allocator, .seq = seq };
@@ -369,7 +369,7 @@ pub const EnrBuilder = struct {
     /// Build the RLP content (without the signature) for signing.
     /// Returns allocated bytes; caller must free.
     pub fn buildContent(self: *const EnrBuilder) std.mem.Allocator.Error![]u8 {
-        var items = std.ArrayListUnmanaged([]u8){};
+        var items = std.ArrayListUnmanaged([]u8).empty;
         defer {
             for (items.items) |it| self.allocator.free(it);
             items.deinit(self.allocator);
@@ -396,7 +396,7 @@ pub const EnrBuilder = struct {
         var sig: [crypto.ecdsa_sig_len]u8 = undefined;
         try crypto.ecdsaSign(&sig, content, privkey);
 
-        var items = std.ArrayListUnmanaged([]u8){};
+        var items = std.ArrayListUnmanaged([]u8).empty;
         defer {
             for (items.items) |it| self.allocator.free(it);
             items.deinit(self.allocator);

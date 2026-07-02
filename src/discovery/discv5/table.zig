@@ -7,6 +7,7 @@
 //! Reference: discv5 spec §5.1 "Node Table".
 
 const std = @import("std");
+const compat = @import("compat");
 const crypto = @import("crypto.zig");
 const standard = @import("../enr/standard.zig");
 
@@ -27,7 +28,7 @@ pub const Entry = struct {
     /// Compressed secp256k1 public key of the remote node.
     pubkey: [crypto.pubkey_len]u8 = [_]u8{0} ** crypto.pubkey_len,
     /// UDP address used for discv5 communication.
-    udp_addr: std.net.Address,
+    udp_addr: compat.Address,
     /// ENR sequence number of the last-seen record.
     enr_seq: u64,
     /// Monotonic timestamp of last successful interaction (ns).
@@ -211,7 +212,7 @@ test "bucket addOrRefresh fills up to k then rejects" {
     for (0..k) |i| {
         const entry = Entry{
             .node_id = makeId(@intCast(i + 1)),
-            .udp_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9000),
+            .udp_addr = compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9000),
             .enr_seq = 1,
             .last_seen_ns = 0,
         };
@@ -220,7 +221,7 @@ test "bucket addOrRefresh fills up to k then rejects" {
     try std.testing.expect(bucket.isFull());
     const extra = Entry{
         .node_id = makeId(0xff),
-        .udp_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9000),
+        .udp_addr = compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9000),
         .enr_seq = 1,
         .last_seen_ns = 0,
     };
@@ -234,7 +235,7 @@ test "routing table add and closest" {
     for (1..10) |i| {
         try std.testing.expect(table.add(.{
             .node_id = makeId(@intCast(i)),
-            .udp_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, @intCast(9000 + i)),
+            .udp_addr = compat.Address.initIp4(.{ 127, 0, 0, 1 }, @intCast(9000 + i)),
             .enr_seq = 1,
             .last_seen_ns = 0,
         }));
@@ -254,7 +255,7 @@ test "remove decrements total" {
     var table = RoutingTable.init(local);
     _ = table.add(.{
         .node_id = makeId(5),
-        .udp_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9005),
+        .udp_addr = compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9005),
         .enr_seq = 1,
         .last_seen_ns = 0,
     });

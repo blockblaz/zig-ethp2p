@@ -13,7 +13,7 @@ pub const PlannerError = error{ Empty, OutOfMemory };
 
 pub const EmitPlanner = struct {
     id_to_pos: std.AutoHashMapUnmanaged(usize, usize) = .{},
-    entries: std.ArrayListUnmanaged(EmitEntry) = .{},
+    entries: std.ArrayListUnmanaged(EmitEntry) = .empty,
 
     pub fn init(gpa: std.mem.Allocator) EmitPlanner {
         _ = gpa;

@@ -34,7 +34,7 @@ pub const ChannelRs = struct {
             .engine = engine,
             .id = id,
             .cfg = cfg,
-            .members = .{},
+            .members = .empty,
             .sessions = .{},
         };
     }

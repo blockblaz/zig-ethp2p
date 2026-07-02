@@ -48,7 +48,7 @@ pub const FanoutMesh = struct {
         const t_gop = try self.subscriptions.getOrPut(self.allocator, topic);
         if (!t_gop.found_existing) {
             t_gop.key_ptr.* = try self.allocator.dupe(u8, topic);
-            t_gop.value_ptr.* = .{};
+            t_gop.value_ptr.* = .empty;
         }
 
         for (t_gop.value_ptr.items) |p| {
@@ -71,7 +71,7 @@ pub const FanoutMesh = struct {
             const i_gop = try self.inboxes.getOrPut(self.allocator, peer);
             if (!i_gop.found_existing) {
                 i_gop.key_ptr.* = try self.allocator.dupe(u8, peer);
-                i_gop.value_ptr.* = .{};
+                i_gop.value_ptr.* = .empty;
             }
             try i_gop.value_ptr.append(self.allocator, blob);
         }
@@ -98,7 +98,7 @@ test "fanout delivers to subscribers except publisher" {
 
     try mesh.publishData("alice", topic, "hello");
 
-    var bob_inbox: std.ArrayListUnmanaged([]u8) = .{};
+    var bob_inbox: std.ArrayListUnmanaged([]u8) = .empty;
     defer {
         for (bob_inbox.items) |s| gpa.free(s);
         bob_inbox.deinit(gpa);
@@ -107,7 +107,7 @@ test "fanout delivers to subscribers except publisher" {
     try std.testing.expectEqual(@as(usize, 1), bob_inbox.items.len);
     try std.testing.expectEqualStrings("hello", bob_inbox.items[0]);
 
-    var alice_inbox: std.ArrayListUnmanaged([]u8) = .{};
+    var alice_inbox: std.ArrayListUnmanaged([]u8) = .empty;
     defer alice_inbox.deinit(gpa);
     try mesh.drainPeer("alice", &alice_inbox);
     try std.testing.expectEqual(@as(usize, 0), alice_inbox.items.len);

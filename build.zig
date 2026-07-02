@@ -1,12 +1,25 @@
 const std = @import("std");
 
+const Bundle = struct {
+    quic_shim: *std.Build.Module,
+    zquic: *std.Build.Module,
+    compat: *std.Build.Module,
+};
+
 fn addZquicQuicModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-) struct { quic_shim: *std.Build.Module, zquic: *std.Build.Module } {
+) Bundle {
     const zquic_pkg = b.dependency("zquic", .{ .target = target, .optimize = optimize });
     const zquic_mod = zquic_pkg.module("zquic");
+
+    // Zig 0.15 → 0.16 std-library compatibility shims (see `src/compat.zig`).
+    const compat = b.createModule(.{
+        .root_source_file = b.path("src/compat.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const quic_shim = b.addModule("quic", .{
         .root_source_file = b.path("src/transport/zquic_quic_shim.zig"),
@@ -14,12 +27,14 @@ fn addZquicQuicModule(
         .optimize = optimize,
     });
     quic_shim.addImport("zquic", zquic_mod);
+    quic_shim.addImport("compat", compat);
 
-    return .{ .quic_shim = quic_shim, .zquic = zquic_mod };
+    return .{ .quic_shim = quic_shim, .zquic = zquic_mod, .compat = compat };
 }
 
-fn wireModule(m: *std.Build.Module, quic_shim: *std.Build.Module) void {
-    m.addImport("quic", quic_shim);
+fn wireModule(m: *std.Build.Module, bundle: Bundle) void {
+    m.addImport("quic", bundle.quic_shim);
+    m.addImport("compat", bundle.compat);
 }
 
 pub fn build(b: *std.Build) void {
@@ -37,7 +52,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    wireModule(mod, bundle.quic_shim);
+    wireModule(mod, bundle);
 
     const lib = b.addLibrary(.{
         .name = "zig_ethp2p",
@@ -50,7 +65,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    wireModule(lib_tests_mod, bundle.quic_shim);
+    wireModule(lib_tests_mod, bundle);
     const lib_tests = b.addTest(.{ .root_module = lib_tests_mod });
     const run_lib_tests = b.addRunArtifact(lib_tests);
     const test_step = b.step("test", "Run library tests (full suite, same as local dev)");
@@ -78,7 +93,7 @@ pub fn build(b: *std.Build) void {
         .optimize = ci_opt,
         .sanitize_thread = ci_tsan,
     });
-    wireModule(broadcast_tests_mod, bundle_ci.quic_shim);
+    wireModule(broadcast_tests_mod, bundle_ci);
     const broadcast_tests = b.addTest(.{ .root_module = broadcast_tests_mod });
     const run_broadcast_tests = b.addRunArtifact(broadcast_tests);
     run_broadcast_tests.has_side_effects = true;
@@ -91,7 +106,7 @@ pub fn build(b: *std.Build) void {
         .optimize = ci_opt,
         .sanitize_thread = ci_tsan,
     });
-    wireModule(sim_rs_tests_mod, bundle_ci.quic_shim);
+    wireModule(sim_rs_tests_mod, bundle_ci);
     const sim_rs_tests = b.addTest(.{ .root_module = sim_rs_tests_mod });
     const run_sim_rs = b.addRunArtifact(sim_rs_tests);
     run_sim_rs.has_side_effects = true;
@@ -104,7 +119,7 @@ pub fn build(b: *std.Build) void {
         .optimize = ci_opt,
         .sanitize_thread = ci_tsan,
     });
-    wireModule(sim_gs_tests_mod, bundle_ci.quic_shim);
+    wireModule(sim_gs_tests_mod, bundle_ci);
     const sim_gs_tests = b.addTest(.{ .root_module = sim_gs_tests_mod });
     const run_sim_gs = b.addRunArtifact(sim_gs_tests);
     run_sim_gs.has_side_effects = true;
@@ -117,7 +132,7 @@ pub fn build(b: *std.Build) void {
         .optimize = ci_opt,
         .sanitize_thread = ci_tsan,
     });
-    wireModule(stress_ci_mod, bundle_ci.quic_shim);
+    wireModule(stress_ci_mod, bundle_ci);
     const run_stress_ci = b.addTest(.{ .root_module = stress_ci_mod });
     const run_stress_ci_run = b.addRunArtifact(run_stress_ci);
     run_stress_ci_run.setEnvironmentVariable("ZIG_ETHP2P_STRESS", "1");
@@ -130,7 +145,7 @@ pub fn build(b: *std.Build) void {
         .target = ci_target,
         .optimize = ci_opt,
     });
-    wireModule(quic_ci_mod, bundle_ci.quic_shim);
+    wireModule(quic_ci_mod, bundle_ci);
     const quic_ci_tests = b.addTest(.{ .root_module = quic_ci_mod });
     const run_quic_ci = b.addRunArtifact(quic_ci_tests);
     const test_quic_step = b.step("test-quic", "Transport QUIC tests (zquic handshake + stream framing)");

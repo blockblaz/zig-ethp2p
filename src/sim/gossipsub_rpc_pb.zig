@@ -101,7 +101,7 @@ fn appendTagLenBytes(list: *std.ArrayListUnmanaged(u8), allocator: Allocator, fi
 
 /// Serializes `ControlIHave` (message body only, not wrapped in `ControlMessage`).
 pub fn encodeIHave(allocator: Allocator, topic: ?[]const u8, message_ids: []const []const u8) Allocator.Error![]u8 {
-    var list: std.ArrayListUnmanaged(u8) = .{};
+    var list: std.ArrayListUnmanaged(u8) = .empty;
     errdefer list.deinit(allocator);
     if (topic) |t| {
         try appendTagLenBytes(&list, allocator, 1, t);
@@ -114,7 +114,7 @@ pub fn encodeIHave(allocator: Allocator, topic: ?[]const u8, message_ids: []cons
 
 /// Serializes `ControlIWant` (message body only).
 pub fn encodeIWant(allocator: Allocator, message_ids: []const []const u8) Allocator.Error![]u8 {
-    var list: std.ArrayListUnmanaged(u8) = .{};
+    var list: std.ArrayListUnmanaged(u8) = .empty;
     errdefer list.deinit(allocator);
     for (message_ids) |mid| {
         try appendTagLenBytes(&list, allocator, 1, mid);
@@ -124,7 +124,7 @@ pub fn encodeIWant(allocator: Allocator, message_ids: []const []const u8) Alloca
 
 /// Top-level `RPC` with only `control` set (field 3). `control_body` is a serialized `ControlMessage`.
 pub fn encodeRpcEnvelopeControl(allocator: Allocator, control_body: []const u8) Allocator.Error![]u8 {
-    var list: std.ArrayListUnmanaged(u8) = .{};
+    var list: std.ArrayListUnmanaged(u8) = .empty;
     errdefer list.deinit(allocator);
     try appendTagLenBytes(&list, allocator, 3, control_body);
     return try list.toOwnedSlice(allocator);
@@ -141,7 +141,7 @@ pub fn decodeRpcControlOnly(buf: []const u8) DecodeError![]const u8 {
 
 /// Wraps one `encodeIHave` payload as `ControlMessage.ihave` (field 1, repeated).
 pub fn encodeControlMessageSingleIHave(allocator: Allocator, ihave_body: []const u8) Allocator.Error![]u8 {
-    var list: std.ArrayListUnmanaged(u8) = .{};
+    var list: std.ArrayListUnmanaged(u8) = .empty;
     errdefer list.deinit(allocator);
     try appendTagLenBytes(&list, allocator, 1, ihave_body);
     return try list.toOwnedSlice(allocator);
@@ -163,7 +163,7 @@ fn decodeTagLen(buf: []const u8, offset: *usize) DecodeError!struct { field: u32
 pub fn decodeIHaveOwned(allocator: Allocator, buf: []const u8) (DecodeError || Allocator.Error)!IHaveOwned {
     var offset: usize = 0;
     var topic: ?[]u8 = null;
-    var ids: std.ArrayListUnmanaged([]u8) = .{};
+    var ids: std.ArrayListUnmanaged([]u8) = .empty;
     errdefer {
         if (topic) |t| allocator.free(t);
         for (ids.items) |m| allocator.free(m);
@@ -194,7 +194,7 @@ pub fn decodeIHaveOwned(allocator: Allocator, buf: []const u8) (DecodeError || A
 
 pub fn decodeIWantOwned(allocator: Allocator, buf: []const u8) (DecodeError || Allocator.Error)!IWantOwned {
     var offset: usize = 0;
-    var ids: std.ArrayListUnmanaged([]u8) = .{};
+    var ids: std.ArrayListUnmanaged([]u8) = .empty;
     errdefer {
         for (ids.items) |m| allocator.free(m);
         ids.deinit(allocator);
@@ -233,7 +233,7 @@ pub const SubOptsOwned = struct {
 };
 
 pub fn encodeSubOpts(allocator: Allocator, s: SubOptsRef) Allocator.Error![]u8 {
-    var list: std.ArrayListUnmanaged(u8) = .{};
+    var list: std.ArrayListUnmanaged(u8) = .empty;
     errdefer list.deinit(allocator);
     if (s.subscribe) |b| try appendTagVarintField(&list, allocator, 1, if (b) 1 else 0);
     if (s.topicid) |t| try appendTagLenBytes(&list, allocator, 2, t);
@@ -314,7 +314,7 @@ pub const GossipMessageOwned = struct {
 };
 
 pub fn encodeGossipMessage(allocator: Allocator, m: GossipMessageRef) Allocator.Error![]u8 {
-    var list: std.ArrayListUnmanaged(u8) = .{};
+    var list: std.ArrayListUnmanaged(u8) = .empty;
     errdefer list.deinit(allocator);
     if (m.from) |x| try appendTagLenBytes(&list, allocator, 1, x);
     if (m.data) |x| try appendTagLenBytes(&list, allocator, 2, x);
@@ -384,7 +384,7 @@ pub const PeerInfoOwned = struct {
 };
 
 pub fn encodePeerInfo(allocator: Allocator, p: PeerInfoRef) Allocator.Error![]u8 {
-    var list: std.ArrayListUnmanaged(u8) = .{};
+    var list: std.ArrayListUnmanaged(u8) = .empty;
     errdefer list.deinit(allocator);
     if (p.peer_id) |x| try appendTagLenBytes(&list, allocator, 1, x);
     if (p.signed_peer_record) |x| try appendTagLenBytes(&list, allocator, 2, x);
@@ -431,7 +431,7 @@ pub const ControlGraftOwned = struct {
 };
 
 pub fn encodeControlGraft(allocator: Allocator, g: ControlGraftRef) Allocator.Error![]u8 {
-    var list: std.ArrayListUnmanaged(u8) = .{};
+    var list: std.ArrayListUnmanaged(u8) = .empty;
     errdefer list.deinit(allocator);
     if (g.topic) |t| try appendTagLenBytes(&list, allocator, 1, t);
     return try list.toOwnedSlice(allocator);
@@ -478,7 +478,7 @@ pub const ControlPruneOwned = struct {
 };
 
 pub fn encodeControlPrune(allocator: Allocator, p: ControlPruneRef) Allocator.Error![]u8 {
-    var list: std.ArrayListUnmanaged(u8) = .{};
+    var list: std.ArrayListUnmanaged(u8) = .empty;
     errdefer list.deinit(allocator);
     if (p.topic) |t| try appendTagLenBytes(&list, allocator, 1, t);
     for (p.peers) |peer| {
@@ -493,7 +493,7 @@ pub fn encodeControlPrune(allocator: Allocator, p: ControlPruneRef) Allocator.Er
 pub fn decodeControlPruneOwned(allocator: Allocator, buf: []const u8) (DecodeError || Allocator.Error)!ControlPruneOwned {
     var offset: usize = 0;
     var topic: ?[]u8 = null;
-    var peer_list: std.ArrayListUnmanaged(PeerInfoOwned) = .{};
+    var peer_list: std.ArrayListUnmanaged(PeerInfoOwned) = .empty;
     errdefer {
         if (topic) |t| allocator.free(t);
         for (peer_list.items) |*x| x.deinit(allocator);
@@ -548,7 +548,7 @@ pub const ControlMessageEncodeRef = struct {
 };
 
 pub fn encodeControlMessage(allocator: Allocator, m: ControlMessageEncodeRef) Allocator.Error![]u8 {
-    var list: std.ArrayListUnmanaged(u8) = .{};
+    var list: std.ArrayListUnmanaged(u8) = .empty;
     errdefer list.deinit(allocator);
     for (m.ihave) |b| try appendTagLenBytes(&list, allocator, 1, b);
     for (m.iwant) |b| try appendTagLenBytes(&list, allocator, 2, b);
@@ -581,27 +581,27 @@ pub const ControlMessageOwned = struct {
 };
 
 pub fn decodeControlMessageOwned(allocator: Allocator, buf: []const u8) (DecodeError || Allocator.Error)!ControlMessageOwned {
-    var ihave: std.ArrayListUnmanaged([]u8) = .{};
+    var ihave: std.ArrayListUnmanaged([]u8) = .empty;
     errdefer {
         for (ihave.items) |x| allocator.free(x);
         ihave.deinit(allocator);
     }
-    var iwant: std.ArrayListUnmanaged([]u8) = .{};
+    var iwant: std.ArrayListUnmanaged([]u8) = .empty;
     errdefer {
         for (iwant.items) |x| allocator.free(x);
         iwant.deinit(allocator);
     }
-    var graft: std.ArrayListUnmanaged([]u8) = .{};
+    var graft: std.ArrayListUnmanaged([]u8) = .empty;
     errdefer {
         for (graft.items) |x| allocator.free(x);
         graft.deinit(allocator);
     }
-    var prune: std.ArrayListUnmanaged([]u8) = .{};
+    var prune: std.ArrayListUnmanaged([]u8) = .empty;
     errdefer {
         for (prune.items) |x| allocator.free(x);
         prune.deinit(allocator);
     }
-    var idontwant: std.ArrayListUnmanaged([]u8) = .{};
+    var idontwant: std.ArrayListUnmanaged([]u8) = .empty;
     errdefer {
         for (idontwant.items) |x| allocator.free(x);
         idontwant.deinit(allocator);
@@ -660,7 +660,7 @@ pub const PartialMessagesExtensionOwned = struct {
 };
 
 pub fn encodePartialMessagesExtension(allocator: Allocator, p: PartialMessagesExtensionRef) Allocator.Error![]u8 {
-    var list: std.ArrayListUnmanaged(u8) = .{};
+    var list: std.ArrayListUnmanaged(u8) = .empty;
     errdefer list.deinit(allocator);
     if (p.topic_id) |x| try appendTagLenBytes(&list, allocator, 1, x);
     if (p.group_id) |x| try appendTagLenBytes(&list, allocator, 2, x);
@@ -729,7 +729,7 @@ pub const RpcOwned = struct {
 };
 
 pub fn encodeRpc(allocator: Allocator, r: RpcEncodeRef) Allocator.Error![]u8 {
-    var list: std.ArrayListUnmanaged(u8) = .{};
+    var list: std.ArrayListUnmanaged(u8) = .empty;
     errdefer list.deinit(allocator);
     for (r.subscriptions) |s| {
         const inner = try encodeSubOpts(allocator, s);
@@ -752,12 +752,12 @@ pub fn encodeRpc(allocator: Allocator, r: RpcEncodeRef) Allocator.Error![]u8 {
 
 pub fn decodeRpcOwned(allocator: Allocator, buf: []const u8) (DecodeError || Allocator.Error)!RpcOwned {
     var offset: usize = 0;
-    var subs: std.ArrayListUnmanaged(SubOptsOwned) = .{};
+    var subs: std.ArrayListUnmanaged(SubOptsOwned) = .empty;
     errdefer {
         for (subs.items) |*s| s.deinit(allocator);
         subs.deinit(allocator);
     }
-    var pubs: std.ArrayListUnmanaged(GossipMessageOwned) = .{};
+    var pubs: std.ArrayListUnmanaged(GossipMessageOwned) = .empty;
     errdefer {
         for (pubs.items) |*m| m.deinit(allocator);
         pubs.deinit(allocator);
@@ -812,7 +812,7 @@ pub fn decodeRpcOwned(allocator: Allocator, buf: []const u8) (DecodeError || All
 
 /// Prefixes `rpc_body` with an unsigned protobuf varint of its length (common libp2p stream framing).
 pub fn encodeRpcLengthPrefixed(allocator: Allocator, rpc_body: []const u8) Allocator.Error![]u8 {
-    var list: std.ArrayListUnmanaged(u8) = .{};
+    var list: std.ArrayListUnmanaged(u8) = .empty;
     errdefer list.deinit(allocator);
     try appendVarintUnmanaged(&list, allocator, @intCast(rpc_body.len));
     try list.appendSlice(allocator, rpc_body);

@@ -88,10 +88,10 @@ pub const PeerConn = struct {
         const out = try quic.streamMakeUni(self.conn, poll_peer);
         self.bcast_out = out;
 
-        var buf = std.ArrayList(u8).empty;
-        defer buf.deinit(self.allocator);
-        try bcast_stream.writeBcastHandshakeOpen(buf.writer(self.allocator), self.allocator, hs);
-        try quic.streamQueueWrite(out, buf.items);
+        var aw = std.Io.Writer.Allocating.init(self.allocator);
+        defer aw.deinit();
+        try bcast_stream.writeBcastHandshakeOpen(&aw.writer, self.allocator, hs);
+        try quic.streamQueueWrite(out, aw.written());
 
         self.state = .handshaking;
     }

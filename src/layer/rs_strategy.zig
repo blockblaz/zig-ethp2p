@@ -1,6 +1,7 @@
 //! Unified per-session RS strategy (`broadcast/rs/strategy.go`).
 
 const std = @import("std");
+const compat = @import("compat");
 const bitmap_mod = @import("bitmap.zig");
 const broadcast_types = @import("broadcast_types.zig");
 const emit_planner = @import("emit_planner.zig");
@@ -202,7 +203,7 @@ pub const RsStrategy = struct {
         const tot = preamble.totalChunks();
 
         var seed: u64 = undefined;
-        std.crypto.random.bytes(std.mem.asBytes(&seed));
+        compat.random.bytes(std.mem.asBytes(&seed));
 
         const chunks = try allocator.alloc([]u8, tot);
         errdefer allocator.free(chunks);
@@ -420,10 +421,10 @@ pub const RsStrategy = struct {
 
     pub fn pollChunks(self: *RsStrategy) (Allocator.Error || emit_planner.PlannerError)![]broadcast_types.ChunkDispatch(ChunkIdent) {
         const allocator = self.allocator;
-        var list: std.ArrayListUnmanaged(broadcast_types.ChunkDispatch(ChunkIdent)) = .{};
+        var list: std.ArrayListUnmanaged(broadcast_types.ChunkDispatch(ChunkIdent)) = .empty;
         errdefer list.deinit(allocator);
 
-        var order: std.ArrayListUnmanaged(PollPeer) = .{};
+        var order: std.ArrayListUnmanaged(PollPeer) = .empty;
         defer order.deinit(allocator);
 
         var it = self.peers.iterator();
@@ -444,7 +445,7 @@ pub const RsStrategy = struct {
 
     fn allocate(self: *RsStrategy, peer: []const u8, ps: *PeerState) (Allocator.Error || emit_planner.PlannerError)!?broadcast_types.ChunkDispatch(ChunkIdent) {
         const allocator = self.allocator;
-        var skipped: std.ArrayListUnmanaged(emit_planner.EmitEntry) = .{};
+        var skipped: std.ArrayListUnmanaged(emit_planner.EmitEntry) = .empty;
         defer skipped.deinit(allocator);
 
         var found_idx: ?usize = null;

@@ -8,6 +8,7 @@
 //! connection pool tier (hot/warm/cold) it currently occupies.
 
 const std = @import("std");
+const compat = @import("compat");
 const score_mod = @import("score.zig");
 const duty_mod = @import("duty.zig");
 const discv5_table = @import("../discv5/table.zig");
@@ -24,7 +25,7 @@ pub const ConnectionTier = enum { hot, warm, cold };
 
 pub const PeerEntry = struct {
     node_id: NodeId,
-    udp_addr: std.net.Address,
+    udp_addr: compat.Address,
     score: Score = .{},
     tier: ConnectionTier = .cold,
     /// Capability field from the peer's ENR.
@@ -38,7 +39,7 @@ pub const PeerEntry = struct {
 // ---------------------------------------------------------------------------
 
 pub const SelfishTable = struct {
-    entries: std.ArrayListUnmanaged(PeerEntry) = .{},
+    entries: std.ArrayListUnmanaged(PeerEntry) = .empty,
     capacity: usize,
 
     pub fn init(capacity: usize) SelfishTable {
@@ -126,7 +127,7 @@ pub const SelfishTable = struct {
 // ---------------------------------------------------------------------------
 
 pub const AltruisticTable = struct {
-    entries: std.ArrayListUnmanaged(PeerEntry) = .{},
+    entries: std.ArrayListUnmanaged(PeerEntry) = .empty,
     capacity: usize,
 
     pub fn init(capacity: usize) AltruisticTable {
@@ -203,7 +204,7 @@ fn makeId(seed: u8) NodeId {
 fn makeEntry(seed: u8, composite: i32) PeerEntry {
     var e = PeerEntry{
         .node_id = makeId(seed),
-        .udp_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9000),
+        .udp_addr = compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9000),
     };
     e.score.composite = composite;
     return e;

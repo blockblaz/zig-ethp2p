@@ -12,6 +12,7 @@
 //! its internal timers and flush any queued outbound QUIC frames.
 
 const std = @import("std");
+const compat = @import("compat");
 const posix = std.posix;
 const discv5_node = @import("../discovery/discv5/node.zig");
 const eth_ec_quic = @import("eth_ec_quic.zig");
@@ -20,25 +21,25 @@ const max_datagram_len = 1500;
 
 pub const SharedUdpSocket = struct {
     sock: posix.socket_t,
-    local_addr: std.net.Address,
+    local_addr: compat.Address,
 
     /// Bind a new UDP socket to `0.0.0.0:port` (port 0 = OS-assigned).
     pub fn bind(port: u16) !SharedUdpSocket {
-        const addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, port);
-        const sock = try posix.socket(
+        const addr = compat.Address.initIp4(.{ 0, 0, 0, 0 }, port);
+        const sock = try compat.socket(
             addr.any.family,
             posix.SOCK.DGRAM | posix.SOCK.NONBLOCK,
             posix.IPPROTO.UDP,
         );
-        errdefer posix.close(sock);
+        errdefer compat.close(sock);
 
         const reuse: c_int = 1;
         try posix.setsockopt(sock, posix.SOL.SOCKET, posix.SO.REUSEADDR, std.mem.asBytes(&reuse));
-        try posix.bind(sock, &addr.any, addr.getOsSockLen());
+        try compat.bind(sock, &addr.any, addr.getOsSockLen());
 
         var actual: posix.sockaddr = undefined;
         var actual_len: posix.socklen_t = @sizeOf(posix.sockaddr);
-        try posix.getsockname(sock, &actual, &actual_len);
+        try compat.getsockname(sock, &actual, &actual_len);
 
         return .{
             .sock = sock,
@@ -47,7 +48,7 @@ pub const SharedUdpSocket = struct {
     }
 
     pub fn deinit(self: *SharedUdpSocket) void {
-        posix.close(self.sock);
+        compat.close(self.sock);
     }
 
     /// The underlying file descriptor — pass to `discv5_node.startFromFd` and
@@ -57,7 +58,7 @@ pub const SharedUdpSocket = struct {
     }
 
     /// The address the socket is bound to (with the actual port when 0 was requested).
-    pub fn localAddr(self: *const SharedUdpSocket) std.net.Address {
+    pub fn localAddr(self: *const SharedUdpSocket) compat.Address {
         return self.local_addr;
     }
 
@@ -90,7 +91,7 @@ pub const SharedUdpSocket = struct {
         var from_len: posix.socklen_t = @sizeOf(posix.sockaddr);
 
         while (true) {
-            const n = posix.recvfrom(
+            const n = compat.recvfrom(
                 self.sock,
                 &buf,
                 posix.MSG.DONTWAIT,
@@ -98,7 +99,7 @@ pub const SharedUdpSocket = struct {
                 &from_len,
             ) catch break; // EAGAIN → no more datagrams
 
-            const peer = std.net.Address{ .any = from };
+            const peer = compat.Address{ .any = from };
 
             if (!discv5.injectDatagram(buf[0..n], peer)) {
                 // Not a discv5 packet — forward to QUIC.

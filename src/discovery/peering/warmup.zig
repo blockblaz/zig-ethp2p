@@ -10,6 +10,7 @@
 //! Reference: ethp2p spec §Peering "session resumption mechanics".
 
 const std = @import("std");
+const compat = @import("compat");
 
 // ---------------------------------------------------------------------------
 // Slot timing constants (12 s slots, 4 phases)
@@ -74,7 +75,7 @@ pub const WarmupRequest = struct {
     /// NodeId of the peer to warm.
     node_id: [32]u8,
     /// UDP address for discv5 / QUIC dial.
-    addr: std.net.Address,
+    addr: compat.Address,
     /// Target slot for which this connection is needed.
     target_slot: u64,
 };
@@ -86,7 +87,7 @@ pub const WarmupRequest = struct {
 pub const Scheduler = struct {
     allocator: std.mem.Allocator,
     /// Queue of outbound warmup requests (FIFO).
-    queue: std.ArrayListUnmanaged(WarmupRequest) = .{},
+    queue: std.ArrayListUnmanaged(WarmupRequest) = .empty,
     /// Current slot number (updated by caller at each slot boundary).
     current_slot: u64 = 0,
 
@@ -161,7 +162,7 @@ test "scheduler accepts request only during idle phase" {
 
     const req = WarmupRequest{
         .node_id = [_]u8{1} ** 32,
-        .addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9000),
+        .addr = compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9000),
         .target_slot = 1,
     };
 
@@ -182,7 +183,7 @@ test "advanceSlot purges stale requests" {
 
     try sched.queue.append(gpa, .{
         .node_id = [_]u8{1} ** 32,
-        .addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9000),
+        .addr = compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9000),
         .target_slot = 0,
     });
     sched.advanceSlot(1);

@@ -1,6 +1,7 @@
 //! Standard ENR key names and field decoders (EIP-778, devp2p ENR spec).
 
 const std = @import("std");
+const compat = @import("compat");
 const enr = @import("enr.zig");
 
 // ---------------------------------------------------------------------------
@@ -30,9 +31,9 @@ pub const StandardFields = struct {
     /// Compressed secp256k1 public key (33 bytes); null if missing.
     pubkey: ?Secp256k1Pubkey = null,
     /// IPv4 address; null if missing.
-    ip: ?std.net.Ip4Address = null,
+    ip: ?compat.Ip4Address = null,
     /// IPv6 address; null if missing.
-    ip6: ?std.net.Ip6Address = null,
+    ip6: ?compat.Ip6Address = null,
     /// TCP port (host byte order); 0 if missing.
     tcp: u16 = 0,
     /// UDP port (host byte order); 0 if missing.
@@ -52,7 +53,7 @@ pub fn decodeStandard(record: *const enr.Enr) enr.EnrError!StandardFields {
     if (record.get(key_ip)) |raw| {
         const val = try enr.rlpStringValue(raw);
         if (val.len != 4) return error.BadRlp;
-        out.ip = std.net.Ip4Address.init(val[0..4].*, 0);
+        out.ip = compat.Ip4Address.init(val[0..4].*, 0);
     }
 
     if (record.get(key_udp)) |raw| {

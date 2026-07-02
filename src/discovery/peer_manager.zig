@@ -11,6 +11,7 @@
 //! `poll(now_ns, slot_offset_ms)` from the owning event loop.
 
 const std = @import("std");
+const compat = @import("compat");
 const discv5_node = @import("discv5/node.zig");
 const discv5_table = @import("discv5/table.zig");
 const peering_table = @import("peering/table.zig");
@@ -53,7 +54,7 @@ pub const PeerManager = struct {
 
     /// Optional callback invoked after a peer is successfully dialed and registered.
     /// Receives the raw context pointer, the peer's 32-byte NodeId, and the UDP address.
-    on_peer_dialed: ?*const fn (ctx: ?*anyopaque, node_id: [32]u8, addr: std.net.Address) void = null,
+    on_peer_dialed: ?*const fn (ctx: ?*anyopaque, node_id: [32]u8, addr: compat.Address) void = null,
     /// Opaque context pointer forwarded to `on_peer_dialed`.
     on_peer_dialed_ctx: ?*anyopaque = null,
 
@@ -131,8 +132,8 @@ pub const PeerManager = struct {
     // -----------------------------------------------------------------------
 
     /// Issue a QUIC dial and register the peer in the peering table.
-    fn dialPeer(self: *PeerManager, node_id: [32]u8, addr: std.net.Address) void {
-        // Convert std.net.Address to the ListenAddress expected by eth_ec_quic.
+    fn dialPeer(self: *PeerManager, node_id: [32]u8, addr: compat.Address) void {
+        // Convert compat.Address to the ListenAddress expected by eth_ec_quic.
         var host_buf: [64]u8 = undefined;
         const host = addressToHostStr(addr, &host_buf) catch return;
 
@@ -186,20 +187,20 @@ pub const PeerManager = struct {
 };
 
 // ---------------------------------------------------------------------------
-// Helper: convert std.net.Address to a host string
+// Helper: convert compat.Address to a host string
 // ---------------------------------------------------------------------------
 
-fn addressToHostStr(addr: std.net.Address, buf: *[64]u8) ![]const u8 {
+fn addressToHostStr(addr: compat.Address, buf: *[64]u8) ![]const u8 {
     return switch (addr.any.family) {
         std.posix.AF.INET => {
-            const bytes = @as(*const [4]u8, @ptrCast(&addr.in.sa.addr));
+            const bytes = @as(*const [4]u8, @ptrCast(&addr.in.addr));
             return std.fmt.bufPrint(buf, "{}.{}.{}.{}", .{
                 bytes[0], bytes[1], bytes[2], bytes[3],
             });
         },
         std.posix.AF.INET6 => {
             // IPv6 — minimal representation.
-            const bytes = addr.in6.sa.addr;
+            const bytes = addr.in6.addr;
             return std.fmt.bufPrint(buf, "{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}", .{
                 bytes[0],  bytes[1],  bytes[2],  bytes[3],
                 bytes[4],  bytes[5],  bytes[6],  bytes[7],
@@ -217,7 +218,7 @@ fn addressToHostStr(addr: std.net.Address, buf: *[64]u8) ![]const u8 {
 
 test "addressToHostStr IPv4" {
     var buf: [64]u8 = undefined;
-    const addr = std.net.Address.initIp4(.{ 192, 168, 1, 1 }, 9000);
+    const addr = compat.Address.initIp4(.{ 192, 168, 1, 1 }, 9000);
     const s = try addressToHostStr(addr, &buf);
     try std.testing.expectEqualStrings("192.168.1.1", s);
 }
@@ -229,13 +230,13 @@ test "evictBelow removes low-scoring peers" {
 
     var good = peering_table.PeerEntry{
         .node_id = [_]u8{1} ** 32,
-        .udp_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9000),
+        .udp_addr = compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9000),
     };
     good.score.composite = 100;
 
     var bad = peering_table.PeerEntry{
         .node_id = [_]u8{2} ** 32,
-        .udp_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001),
+        .udp_addr = compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9001),
     };
     bad.score.composite = -150;
 

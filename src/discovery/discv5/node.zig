@@ -11,6 +11,7 @@
 //! the event loop.  The caller provides a send callback for outbound datagrams.
 
 const std = @import("std");
+const compat = @import("compat");
 const table = @import("table.zig");
 const session = @import("session.zig");
 const protocol = @import("protocol.zig");
@@ -25,7 +26,7 @@ const ethp2p_enr = @import("../enr/ethp2p.zig");
 
 pub const Config = struct {
     /// UDP address to listen on.
-    listen_addr: std.net.Address = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0),
+    listen_addr: compat.Address = compat.Address.initIp4(.{ 0, 0, 0, 0 }, 0),
     /// Local secp256k1 private key (32-byte scalar).
     local_privkey: [crypto.privkey_len]u8 = [_]u8{0} ** crypto.privkey_len,
     /// How often to refresh each bucket (ms).
@@ -54,7 +55,7 @@ const PendingRequest = struct {
 /// against an inbound WHOAREYOU challenge.
 const PendingChallenge = struct {
     target: table.NodeId,
-    addr: std.net.Address,
+    addr: compat.Address,
     nonce: [12]u8,
     /// Plaintext message to re-encrypt inside the Handshake body.
     plain_msg: ?[]const u8,
@@ -88,9 +89,9 @@ pub const Node = struct {
     owns_socket: bool = true,
 
     /// In-flight requests.
-    pending: std.ArrayListUnmanaged(PendingRequest) = .{},
+    pending: std.ArrayListUnmanaged(PendingRequest) = .empty,
     /// Outbound ordinary packets awaiting WHOAREYOU correlation.
-    challenge_pending: std.ArrayListUnmanaged(PendingChallenge) = .{},
+    challenge_pending: std.ArrayListUnmanaged(PendingChallenge) = .empty,
     /// Active lookup (only one at a time for simplicity).
     active_lookup: ?Lookup = null,
     /// Cache of ENR capabilities by NodeId (populated from NODES responses).
@@ -105,7 +106,7 @@ pub const Node = struct {
 
     /// Outbound send callback.
     /// The caller can set this to forward datagrams via their own UDP loop.
-    send_fn: ?*const fn (addr: std.net.Address, data: []const u8) void = null,
+    send_fn: ?*const fn (addr: compat.Address, data: []const u8) void = null,
 
     pub fn init(allocator: std.mem.Allocator, config: Config) crypto.Secp256k1Error!Node {
         var pubkey: [crypto.pubkey_len]u8 = undefined;
@@ -124,7 +125,7 @@ pub const Node = struct {
     pub fn deinit(self: *Node) void {
         if (self.owns_socket) {
             if (self.socket) |sock| {
-                std.posix.close(sock);
+                compat.close(sock);
                 self.socket = null;
             }
         }
@@ -140,12 +141,12 @@ pub const Node = struct {
     /// Bind a new UDP socket and start the node.
     pub fn start(self: *Node) !void {
         const addr = self.config.listen_addr;
-        const sock = try std.posix.socket(
+        const sock = try compat.socket(
             addr.any.family,
             std.posix.SOCK.DGRAM | std.posix.SOCK.NONBLOCK,
             0,
         );
-        try std.posix.bind(sock, &addr.any, addr.getOsSockLen());
+        try compat.bind(sock, &addr.any, addr.getOsSockLen());
         self.socket = sock;
         self.owns_socket = true;
         self.state = .running;
@@ -164,7 +165,7 @@ pub const Node = struct {
     pub fn stop(self: *Node) void {
         if (self.owns_socket) {
             if (self.socket) |sock| {
-                std.posix.close(sock);
+                compat.close(sock);
             }
         }
         self.socket = null;
@@ -206,7 +207,7 @@ pub const Node = struct {
         var from_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr);
 
         while (true) {
-            const n = std.posix.recvfrom(
+            const n = compat.recvfrom(
                 sock,
                 &dgram,
                 std.posix.MSG.DONTWAIT,
@@ -214,7 +215,7 @@ pub const Node = struct {
                 &from_len,
             ) catch break; // EAGAIN/EWOULDBLOCK → no more datagrams
 
-            const from = std.net.Address{ .any = from_addr };
+            const from = compat.Address{ .any = from_addr };
             self.handleDatagram(dgram[0..n], from);
         }
     }
@@ -223,7 +224,7 @@ pub const Node = struct {
     // Inbound packet dispatch
     // -----------------------------------------------------------------------
 
-    fn handleDatagram(self: *Node, data: []const u8, from: std.net.Address) void {
+    fn handleDatagram(self: *Node, data: []const u8, from: compat.Address) void {
         var hdr_buf: [packet.static_header_len + 300 + 32]u8 = undefined;
         const pkt = packet.decode(data, self.local_id, &hdr_buf) catch return;
 
@@ -238,7 +239,7 @@ pub const Node = struct {
     /// (e.g. a shared UDP socket).  Returns `true` when the datagram was valid
     /// discv5 and has been processed; `false` when it should be forwarded elsewhere
     /// (e.g. to a co-located QUIC endpoint).
-    pub fn injectDatagram(self: *Node, data: []const u8, from: std.net.Address) bool {
+    pub fn injectDatagram(self: *Node, data: []const u8, from: compat.Address) bool {
         var hdr_buf: [packet.static_header_len + 300 + 32]u8 = undefined;
         const pkt = packet.decode(data, self.local_id, &hdr_buf) catch return false;
         switch (pkt) {
@@ -254,7 +255,7 @@ pub const Node = struct {
         hdr: packet.PacketHeader,
         auth: packet.OrdinaryAuthData,
         encrypted_body: []const u8,
-        from: std.net.Address,
+        from: compat.Address,
     ) void {
         // Look up session keys for src_id.
         const sess = self.sessions.get(auth.src_id) orelse {
@@ -289,7 +290,7 @@ pub const Node = struct {
         hdr: packet.PacketHeader,
         auth: packet.WhoareyouAuthData,
         raw_datagram: []const u8,
-        from: std.net.Address,
+        from: compat.Address,
     ) void {
         // Correlate by matching the WHOAREYOU's nonce against nonces of
         // packets we recently sent.
@@ -327,14 +328,14 @@ pub const Node = struct {
         if (pending.plain_msg) |msg| {
             if (msg.len + crypto.aes_tag_len > ct_buf.len) return;
             var nonce: [crypto.aes_nonce_len]u8 = undefined;
-            std.crypto.random.bytes(&nonce);
+            compat.random.bytes(&nonce);
             crypto.encryptAesGcm(ct_buf[0 .. msg.len + crypto.aes_tag_len], msg, &hdr.nonce, keys.initiator_key, nonce);
             ct_len = msg.len + crypto.aes_tag_len;
         }
 
         // Encode and send the Handshake packet.
         var iv: [packet.masking_iv_len]u8 = undefined;
-        std.crypto.random.bytes(&iv);
+        compat.random.bytes(&iv);
         var dgram: [packet.max_datagram_len]u8 = undefined;
         const n = packet.encodeHandshake(&dgram, iv, pending.target, hdr.nonce, .{
             .src_id = self.local_id,
@@ -366,7 +367,7 @@ pub const Node = struct {
         hdr: packet.PacketHeader,
         auth: packet.HandshakeAuthData,
         encrypted_body: []const u8,
-        from: std.net.Address,
+        from: compat.Address,
     ) void {
         // The session for this peer must exist in awaiting_handshake state
         // (created by sendWhoareyou). It holds the id_nonce and raw
@@ -401,7 +402,7 @@ pub const Node = struct {
         hdr: packet.PacketHeader,
         auth: packet.HandshakeAuthData,
         encrypted_body: []const u8,
-        from: std.net.Address,
+        from: compat.Address,
         sess: *session.Session,
     ) void {
         // ECDH shared secret using our static key and their ephemeral key.
@@ -435,7 +436,7 @@ pub const Node = struct {
         hdr: packet.PacketHeader,
         auth: packet.HandshakeAuthData,
         encrypted_body: []const u8,
-        from: std.net.Address,
+        from: compat.Address,
         sess: *session.Session,
     ) void {
         // Without a known static pubkey we cannot verify the id-signature
@@ -561,7 +562,7 @@ pub const Node = struct {
             // Add to routing table with a placeholder UDP address.
             const entry = table.Entry{
                 .node_id = node_id,
-                .udp_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0),
+                .udp_addr = compat.Address.initIp4(.{ 0, 0, 0, 0 }, 0),
                 .enr_seq = rec.seq,
                 .last_seen_ns = self.last_poll_ns,
             };
@@ -574,7 +575,7 @@ pub const Node = struct {
         }
     }
 
-    fn processInboundEnr(self: *Node, raw: []const u8, from: std.net.Address) void {
+    fn processInboundEnr(self: *Node, raw: []const u8, from: compat.Address) void {
         var rec = enr_mod.decode(self.allocator, raw) catch return;
         defer rec.deinit();
 
@@ -618,18 +619,18 @@ pub const Node = struct {
         self: *Node,
         node_id: table.NodeId,
         plain: []const u8,
-        addr: std.net.Address,
+        addr: compat.Address,
         sess: *session.Session,
     ) void {
         var nonce: [crypto.aes_nonce_len]u8 = undefined;
-        std.crypto.random.bytes(&nonce);
+        compat.random.bytes(&nonce);
 
         var ct: [packet.max_datagram_len]u8 = undefined;
         if (plain.len + crypto.aes_tag_len > ct.len) return;
         crypto.encryptAesGcm(ct[0 .. plain.len + crypto.aes_tag_len], plain, &nonce, sess.keys.initiator_key, nonce);
 
         var iv: [packet.masking_iv_len]u8 = undefined;
-        std.crypto.random.bytes(&iv);
+        compat.random.bytes(&iv);
 
         var dgram: [packet.max_datagram_len]u8 = undefined;
         const n = packet.encodeOrdinary(
@@ -662,18 +663,18 @@ pub const Node = struct {
         self: *Node,
         node_id: table.NodeId,
         plain: []const u8,
-        addr: std.net.Address,
+        addr: compat.Address,
     ) void {
         var nonce: [crypto.aes_nonce_len]u8 = undefined;
-        std.crypto.random.bytes(&nonce);
+        compat.random.bytes(&nonce);
 
         // Random ciphertext — the remote won't decrypt this; it will reply
         // with WHOAREYOU.
         var random_ct: [44]u8 = undefined;
-        std.crypto.random.bytes(&random_ct);
+        compat.random.bytes(&random_ct);
 
         var iv: [packet.masking_iv_len]u8 = undefined;
-        std.crypto.random.bytes(&iv);
+        compat.random.bytes(&iv);
 
         var dgram: [packet.max_datagram_len]u8 = undefined;
         const n = packet.encodeOrdinary(
@@ -703,12 +704,12 @@ pub const Node = struct {
         self: *Node,
         dest_id: table.NodeId,
         challenge_nonce: [12]u8,
-        dest_addr: std.net.Address,
+        dest_addr: compat.Address,
     ) void {
         var id_nonce: [16]u8 = undefined;
-        std.crypto.random.bytes(&id_nonce);
+        compat.random.bytes(&id_nonce);
         var iv: [packet.masking_iv_len]u8 = undefined;
-        std.crypto.random.bytes(&iv);
+        compat.random.bytes(&iv);
 
         var dgram: [packet.max_datagram_len]u8 = undefined;
         const n = packet.encodeWhoareyou(&dgram, iv, dest_id, challenge_nonce, id_nonce, 0) catch return;
@@ -723,7 +724,7 @@ pub const Node = struct {
         self.sendDatagram(dest_addr, dgram[0..n]);
     }
 
-    fn sendPing(self: *Node, node_id: table.NodeId, addr: std.net.Address) void {
+    fn sendPing(self: *Node, node_id: table.NodeId, addr: compat.Address) void {
         _ = addr;
         const req_id = self.nextRequestId();
         const msg = protocol.Ping{ .request_id = req_id, .enr_seq = 1 };
@@ -755,13 +756,13 @@ pub const Node = struct {
         }) catch {};
     }
 
-    fn sendDatagram(self: *Node, addr: std.net.Address, data: []const u8) void {
+    fn sendDatagram(self: *Node, addr: compat.Address, data: []const u8) void {
         if (self.send_fn) |f| {
             f(addr, data);
             return;
         }
         if (self.socket) |sock| {
-            _ = std.posix.sendto(sock, data, 0, &addr.any, addr.getOsSockLen()) catch {};
+            _ = compat.sendto(sock, data, 0, &addr.any, addr.getOsSockLen()) catch {};
         }
     }
 
@@ -906,7 +907,7 @@ test "node init and start/stop" {
     const gpa = std.testing.allocator;
     var node = try Node.init(gpa, .{
         .local_privkey = [_]u8{1} ** 32,
-        .listen_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0),
+        .listen_addr = compat.Address.initIp4(.{ 127, 0, 0, 1 }, 0),
     });
     defer node.deinit();
 
@@ -936,7 +937,7 @@ test "addBootstrap populates routing table" {
 
     node.addBootstrap(.{
         .node_id = [_]u8{0xff} ** 32,
-        .udp_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9000),
+        .udp_addr = compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9000),
         .enr_seq = 1,
         .last_seen_ns = 0,
     });
@@ -951,7 +952,7 @@ test "queryByCapability returns all nodes when scheme_mask=0" {
     for (0..5) |i| {
         node.addBootstrap(.{
             .node_id = [_]u8{@intCast(i + 1)} ** 32,
-            .udp_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, @intCast(9000 + i)),
+            .udp_addr = compat.Address.initIp4(.{ 127, 0, 0, 1 }, @intCast(9000 + i)),
             .enr_seq = 1,
             .last_seen_ns = 0,
         });
@@ -970,21 +971,21 @@ test "queryByCapability returns all nodes when scheme_mask=0" {
 const TestDatagram = struct {
     data: [packet.max_datagram_len]u8,
     len: usize,
-    addr: std.net.Address,
+    addr: compat.Address,
 };
 
 /// Simple capture buffer shared between two test nodes.
 var test_capture_a: ?TestDatagram = null;
 var test_capture_b: ?TestDatagram = null;
 
-fn captureSendA(_: std.net.Address, data: []const u8) void {
+fn captureSendA(_: compat.Address, data: []const u8) void {
     var d: TestDatagram = undefined;
     @memcpy(d.data[0..data.len], data);
     d.len = data.len;
     test_capture_a = d;
 }
 
-fn captureSendB(_: std.net.Address, data: []const u8) void {
+fn captureSendB(_: compat.Address, data: []const u8) void {
     var d: TestDatagram = undefined;
     @memcpy(d.data[0..data.len], data);
     d.len = data.len;
@@ -1016,8 +1017,8 @@ fn makeTestNodePair(gpa: std.mem.Allocator) !TestNodePair {
     try crypto.generatePubkey(&pub_b, priv_b);
     const id_b = try crypto.nodeIdFromPubkey(pub_b);
 
-    const addr_a = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001);
-    const addr_b = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9002);
+    const addr_a = compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9001);
+    const addr_b = compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9002);
 
     const a = try gpa.create(Node);
     a.* = try Node.init(gpa, .{ .local_privkey = priv_a });
@@ -1059,7 +1060,7 @@ test "WHOAREYOU nonce echoes challenge nonce" {
     var pub_b: [crypto.pubkey_len]u8 = undefined;
     try crypto.generatePubkey(&pub_b, priv_b);
     const id_b = try crypto.nodeIdFromPubkey(pub_b);
-    pair.a.sendPing(id_b, std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9002));
+    pair.a.sendPing(id_b, compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9002));
 
     // A's outbound packet was captured in test_capture_b.
     const initial = test_capture_b orelse return error.NoDatagram;
@@ -1074,7 +1075,7 @@ test "WHOAREYOU nonce echoes challenge nonce" {
 
     // B receives the packet — should respond with WHOAREYOU.
     test_capture_a = null;
-    pair.b.handleDatagram(initial.data[0..initial.len], std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001));
+    pair.b.handleDatagram(initial.data[0..initial.len], compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9001));
 
     const whoareyou = test_capture_a orelse return error.NoWhoareyou;
     var hdr_buf2: [packet.static_header_len + 300 + 32]u8 = undefined;
@@ -1107,7 +1108,7 @@ test "full handshake roundtrip establishes session" {
     const id_a = try crypto.nodeIdFromPubkey(pub_a);
 
     // Step 1: A sends PING to B (no session -> sends random packet).
-    pair.a.sendPing(id_b, std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9002));
+    pair.a.sendPing(id_b, compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9002));
     const pkt1 = test_capture_b orelse return error.NoDatagram;
 
     // Verify A recorded a pending challenge.
@@ -1115,7 +1116,7 @@ test "full handshake roundtrip establishes session" {
 
     // Step 2: B receives random packet -> sends WHOAREYOU.
     test_capture_a = null;
-    pair.b.handleDatagram(pkt1.data[0..pkt1.len], std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001));
+    pair.b.handleDatagram(pkt1.data[0..pkt1.len], compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9001));
     const pkt2 = test_capture_a orelse return error.NoWhoareyou;
 
     // Verify B has a session in awaiting_handshake state.
@@ -1125,7 +1126,7 @@ test "full handshake roundtrip establishes session" {
 
     // Step 3: A receives WHOAREYOU -> sends Handshake.
     test_capture_b = null;
-    pair.a.handleDatagram(pkt2.data[0..pkt2.len], std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9002));
+    pair.a.handleDatagram(pkt2.data[0..pkt2.len], compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9002));
     const pkt3 = test_capture_b orelse return error.NoHandshake;
 
     // Verify A established a session.
@@ -1137,7 +1138,7 @@ test "full handshake roundtrip establishes session" {
     try std.testing.expectEqual(@as(usize, 0), pair.a.challenge_pending.items.len);
 
     // Step 4: B receives Handshake -> establishes session.
-    pair.b.handleDatagram(pkt3.data[0..pkt3.len], std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001));
+    pair.b.handleDatagram(pkt3.data[0..pkt3.len], compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9001));
     const sess_b2 = pair.b.sessions.get(id_a);
     try std.testing.expect(sess_b2 != null);
     try std.testing.expectEqual(session.SessionState.established, sess_b2.?.state);
@@ -1149,7 +1150,7 @@ test "pending challenge expiry removes stale entries" {
     defer node.deinit();
 
     const target_id = [_]u8{0xaa} ** 32;
-    const addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9000);
+    const addr = compat.Address.initIp4(.{ 127, 0, 0, 1 }, 9000);
 
     node.challenge_pending.append(gpa, .{
         .target = target_id,
