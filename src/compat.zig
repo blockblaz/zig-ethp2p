@@ -503,7 +503,7 @@ pub const GetEnvError = error{ EnvironmentVariableNotFound, OutOfMemory };
 /// `/proc/self/environ` (no libc required); other targets use libc `getenv`.
 pub fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) GetEnvError![]u8 {
     if (comptime builtin.os.tag == .linux) {
-        const fd = system.open("/proc/self/environ", posix.O{ .ACCMODE = .RDONLY }, 0);
+        const fd = system.open("/proc/self/environ", posix.O{ .ACCMODE = .RDONLY }, @as(posix.mode_t, 0));
         if (posix.errno(fd) != .SUCCESS) return error.EnvironmentVariableNotFound;
         const handle: posix.fd_t = @intCast(fd);
         defer _ = system.close(handle);
