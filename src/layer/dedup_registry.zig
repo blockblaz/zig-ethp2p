@@ -42,7 +42,7 @@ pub const DedupRegistry = struct {
         message_id: []const u8,
     ) void {
         const prefix = makePrefixLen(channel_id, message_id);
-        var to_remove: std.ArrayListUnmanaged([]const u8) = .{};
+        var to_remove: std.ArrayListUnmanaged([]const u8) = .empty;
         defer to_remove.deinit(allocator);
 
         var it = self.seen.iterator();

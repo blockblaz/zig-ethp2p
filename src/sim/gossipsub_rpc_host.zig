@@ -16,7 +16,7 @@ pub const Link = struct {
     gpa: Allocator,
 
     pub fn init(gpa: Allocator) Link {
-        return .{ .ab = .{}, .ba = .{}, .gpa = gpa };
+        return .{ .ab = .empty, .ba = .empty, .gpa = gpa };
     }
 
     pub fn deinit(self: *Link) void {

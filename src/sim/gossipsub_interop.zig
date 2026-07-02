@@ -38,7 +38,7 @@ test "mesh fanout two recipients decode same application payload" {
 
     const names = [_][]const u8{ "bob", "carol" };
     for (names) |who| {
-        var inbox: std.ArrayListUnmanaged([]u8) = .{};
+        var inbox: std.ArrayListUnmanaged([]u8) = .empty;
         defer {
             for (inbox.items) |s| gpa.free(s);
             inbox.deinit(gpa);

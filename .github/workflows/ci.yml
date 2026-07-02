@@ -17,7 +17,7 @@ on:
     branches: [main, feature]
 
 env:
-  ZIG_VERSION: 0.15.1
+  ZIG_VERSION: 0.16.0
   # Normative prose under ethp2p `specs/`; keep in sync with `UPSTREAM.md` "Pinned revision".
   ETHP2P_SPECS_REF: 741d8d9cf682ff93b7d8eb56e0377ba8eea83a7e
 

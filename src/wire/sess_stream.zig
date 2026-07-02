@@ -7,14 +7,14 @@ pub const SessStreamError = error{ExpectedSessionOpen};
 
 /// Writes one length-prefixed `Sess` frame (no selector). Matches
 /// `WriteFrame` on an outbound SESS stream after the opener.
-pub fn writeSessFrame(writer: anytype, allocator: std.mem.Allocator, msg: broadcast.Sess) !void {
+pub fn writeSessFrame(writer: *std.Io.Writer, allocator: std.mem.Allocator, msg: broadcast.Sess) !void {
     const bytes = try broadcast.encodeSess(allocator, msg);
     defer allocator.free(bytes);
     try frame.writeFrame(writer, bytes);
 }
 
 /// Reads one `Sess` frame. Used for both the first open and subsequent routing updates.
-pub fn readSessFrame(allocator: std.mem.Allocator, reader: anytype) !broadcast.SessOwned {
+pub fn readSessFrame(allocator: std.mem.Allocator, reader: *std.Io.Reader) !broadcast.SessOwned {
     const bytes = try frame.readFrame(allocator, reader);
     defer allocator.free(bytes);
     return broadcast.decodeSess(allocator, bytes);
@@ -22,14 +22,14 @@ pub fn readSessFrame(allocator: std.mem.Allocator, reader: anytype) !broadcast.S
 
 /// Opens an outbound SESS stream: selector `PROTOCOL_SESS` then `session_open`.
 /// Matches `PeerConn.handleSessionOpen` (`peer_ctrl.go`).
-pub fn writeSessSessionOpen(writer: anytype, allocator: std.mem.Allocator, open: broadcast.SessOpen) !void {
+pub fn writeSessSessionOpen(writer: *std.Io.Writer, allocator: std.mem.Allocator, open: broadcast.SessOpen) !void {
     try protocol.writeSelectorByte(writer, .sess);
     try writeSessFrame(writer, allocator, .{ .session_open = open });
 }
 
 /// After `PROTOCOL_SESS` was read (e.g. in an accept loop), the first frame MUST be
 /// `session_open`. Matches `runInboundSession`’s first `ReadFrame` (`peer_in.go`).
-pub fn readSessSessionOpenAfterSelector(allocator: std.mem.Allocator, reader: anytype) !broadcast.SessOwned {
+pub fn readSessSessionOpenAfterSelector(allocator: std.mem.Allocator, reader: *std.Io.Reader) !broadcast.SessOwned {
     var msg = try readSessFrame(allocator, reader);
     switch (msg) {
         .session_open => return msg,
@@ -45,23 +45,22 @@ test "sess session open matches reference layout" {
     var golden_buf: [64]u8 = undefined;
     const golden = try std.fmt.hexToBytes(&golden_buf, "02000000150a130a0363683112036d69641a0301020322020405");
 
-    var list = std.ArrayList(u8).empty;
-    defer list.deinit(alloc);
+    var aw = std.Io.Writer.Allocating.init(alloc);
+    defer aw.deinit();
     {
-        const w = list.writer(alloc);
-        try writeSessSessionOpen(w, alloc, .{
+        try writeSessSessionOpen(&aw.writer, alloc, .{
             .channel = "ch1",
             .message_id = "mid",
             .preamble = &.{ 1, 2, 3 },
             .initial_update = &.{ 4, 5 },
         });
     }
-    try std.testing.expectEqualSlices(u8, golden, list.items);
+    try std.testing.expectEqualSlices(u8, golden, aw.written());
 
-    var fbs = std.io.fixedBufferStream(list.items);
-    const sel = try protocol.readSelectorByte(fbs.reader());
+    var fbs = std.Io.Reader.fixed(aw.written());
+    const sel = try protocol.readSelectorByte(&fbs);
     try std.testing.expectEqual(protocol.Protocol.sess, sel);
-    var open = try readSessSessionOpenAfterSelector(alloc, fbs.reader());
+    var open = try readSessSessionOpenAfterSelector(alloc, &fbs);
     defer open.deinit(alloc);
     switch (open) {
         .session_open => |o| {
@@ -74,14 +73,13 @@ test "sess session open matches reference layout" {
 
 test "sess routing update roundtrip after open" {
     const alloc = std.testing.allocator;
-    var list = std.ArrayList(u8).empty;
-    defer list.deinit(alloc);
+    var aw = std.Io.Writer.Allocating.init(alloc);
+    defer aw.deinit();
     {
-        const w = list.writer(alloc);
-        try writeSessFrame(w, alloc, .{ .routing_update = .{ .data = &.{ 0xAB, 0xCD } } });
+        try writeSessFrame(&aw.writer, alloc, .{ .routing_update = .{ .data = &.{ 0xAB, 0xCD } } });
     }
-    var fbs = std.io.fixedBufferStream(list.items);
-    var upd = try readSessFrame(alloc, fbs.reader());
+    var fbs = std.Io.Reader.fixed(aw.written());
+    var upd = try readSessFrame(alloc, &fbs);
     defer upd.deinit(alloc);
     switch (upd) {
         .routing_update => |u| try std.testing.expectEqualSlices(u8, &.{ 0xAB, 0xCD }, u.data),

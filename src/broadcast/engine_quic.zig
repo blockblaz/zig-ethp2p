@@ -63,8 +63,8 @@ pub const EngineQuicHost = struct {
         const st = self.peer.bcast_in orelse return error.MissingBcastIn;
         const buf = try drainUniStream(self.allocator, st, self.peer.ep, self.peer_ep);
         defer self.allocator.free(buf);
-        var fbs = std.io.fixedBufferStream(buf);
-        var owned = try bcast_stream.readBcastPeerHandshake(self.allocator, fbs.reader());
+        var fbs = std.Io.Reader.fixed(buf);
+        var owned = try bcast_stream.readBcastPeerHandshake(self.allocator, &fbs);
         defer owned.deinit(self.allocator);
         switch (owned) {
             .peer_handshake => |h| {
@@ -129,8 +129,8 @@ fn preambleOwnedToRs(allocator: std.mem.Allocator, owned: wire_rs.PreambleOwned)
 fn handleSessStream(host: *EngineQuicHost, st: *quic.QuicStream) !void {
     const buf = try drainUniStream(host.allocator, st, host.peer.ep, host.peer_ep);
     defer host.allocator.free(buf);
-    var fbs = std.io.fixedBufferStream(buf);
-    const r = fbs.reader();
+    var fbs = std.Io.Reader.fixed(buf);
+    const r = &fbs;
     const sel = try protocol.readSelectorByte(r);
     if (sel != .sess) return;
     var open_msg = try sess_stream.readSessSessionOpenAfterSelector(host.allocator, r);
@@ -154,8 +154,8 @@ fn handleChunkStream(host: *EngineQuicHost, st: *quic.QuicStream) !void {
 
     const buf = try drainUniStream(host.allocator, st, host.peer.ep, host.peer_ep);
     defer host.allocator.free(buf);
-    var fbs = std.io.fixedBufferStream(buf);
-    var chunk_in = try chunk_stream.readChunkStream(host.allocator, fbs.reader());
+    var fbs = std.Io.Reader.fixed(buf);
+    var chunk_in = try chunk_stream.readChunkStream(host.allocator, &fbs);
     defer chunk_in.deinit(host.allocator);
 
     const ch = host.engine.channelRs(chunk_in.header.channel) orelse return error.ChannelNotFound;
@@ -216,13 +216,12 @@ pub fn peerSendRsChunk(
     payload: []const u8,
 ) (std.mem.Allocator.Error || errors.Error)!void {
     const st = quic.streamMakeUni(pc.conn, poll_peer) catch return error.ChunkWriteFail;
-    var buf = std.ArrayList(u8).empty;
-    defer buf.deinit(pc.allocator);
+    var aw = std.Io.Writer.Allocating.init(pc.allocator);
+    defer aw.deinit();
     {
-        const w = buf.writer(pc.allocator);
-        chunk_stream.writeRsShardChunk(w, pc.allocator, channel_id, message_id, shard_index, payload) catch return error.ChunkMarshal;
+        chunk_stream.writeRsShardChunk(&aw.writer, pc.allocator, channel_id, message_id, shard_index, payload) catch return error.ChunkMarshal;
     }
-    try quic.streamQueueWrite(st, buf.items);
+    try quic.streamQueueWrite(st, aw.written());
     const peer_ep = poll_peer orelse pc.ep;
     quic.streamDrainWrites(st, peer_ep, 10_000) catch return error.ChunkWriteFail;
 }

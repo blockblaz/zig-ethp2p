@@ -4,6 +4,7 @@
 //! allocator (for example `page_allocator` or a locked GPA), not `std.testing.allocator`.
 
 const std = @import("std");
+const compat = @import("compat");
 const broadcast_types = @import("broadcast_types.zig");
 const verify_queue_mod = @import("verify_queue.zig");
 
@@ -20,12 +21,12 @@ pub const VerifyWorkerPool = struct {
     allocator: Allocator,
     /// Allocator for `out.push` growth; must match whoever calls `VerifyQueue.deinit`.
     queue_allocator: Allocator,
-    pool: std.Thread.Pool,
+    pool: compat.Pool,
     out: *verify_queue_mod.VerifyQueue,
-    out_mutex: std.Thread.Mutex = .{},
+    out_mutex: compat.Mutex = .{},
 
     /// Initializes `self` in place. Worker threads capture `&self.pool`; the `Thread.Pool` must not be
-    /// stack-copied after `init` (see `std.Thread.Pool.init`).
+    /// stack-copied after `init` (see `compat.Pool.init`).
     pub fn init(
         self: *VerifyWorkerPool,
         pool_allocator: Allocator,
@@ -54,7 +55,7 @@ pub const VerifyWorkerPool = struct {
     }
 
     /// Same as `schedule`, but increments `wg` before enqueue and finishes after the result is pushed.
-    pub fn scheduleWait(self: *VerifyWorkerPool, wg: *std.Thread.WaitGroup, job: VerifyJob) !void {
+    pub fn scheduleWait(self: *VerifyWorkerPool, wg: *compat.WaitGroup, job: VerifyJob) !void {
         const owned = try self.allocator.dupe(u8, job.data);
         errdefer self.allocator.free(owned);
         self.pool.spawnWg(wg, runOne, .{ self, job.handle, job.expected_hash, owned });

@@ -240,7 +240,7 @@ pub const ChannelEventQueue = struct {
     items: std.ArrayListUnmanaged(ChannelEvent),
 
     pub fn init(allocator: Allocator) ChannelEventQueue {
-        return .{ .allocator = allocator, .items = .{} };
+        return .{ .allocator = allocator, .items = .empty };
     }
 
     pub fn deinit(self: *ChannelEventQueue) void {
@@ -359,7 +359,7 @@ pub const PeerChunkOutbox = struct {
     items: std.ArrayListUnmanaged(PeerSendChunk),
 
     pub fn init(allocator: Allocator) PeerChunkOutbox {
-        return .{ .allocator = allocator, .items = .{} };
+        return .{ .allocator = allocator, .items = .empty };
     }
 
     pub fn deinit(self: *PeerChunkOutbox) void {

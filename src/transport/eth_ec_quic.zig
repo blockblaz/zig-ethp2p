@@ -4,6 +4,7 @@
 //! Run `zig build test-quic` for handshake + BCAST/SESS stream smoke tests.
 
 const std = @import("std");
+const compat = @import("compat");
 const builtin = @import("builtin");
 const common = @import("eth_ec_quic_common.zig");
 const quic = @import("quic");
@@ -58,7 +59,7 @@ pub fn dial(allocator: *std.mem.Allocator, config: EthEcQuicConfig, remote: List
 pub fn listenOnFd(
     allocator: *std.mem.Allocator,
     fd: std.posix.fd_t,
-    local_addr: std.net.Address,
+    local_addr: compat.Address,
     config: EthEcQuicConfig,
 ) !EthEcQuicListener {
     const enabled = @import("eth_ec_quic_enabled.zig");
@@ -77,8 +78,8 @@ pub fn pollListener(listener: *EthEcQuicListener, timeout_ms: u32) !void {
 pub fn feedPacket(
     listener: *EthEcQuicListener,
     data: []const u8,
-    peer: std.net.Address,
-    local: std.net.Address,
+    peer: compat.Address,
+    local: compat.Address,
 ) void {
     quic.feedPacket(listener.ep, data, peer, local);
 }
@@ -104,11 +105,11 @@ test "UDP bind ephemeral (bootstrap for future QUIC socket)" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
     if (builtin.os.tag == .wasi) return error.SkipZigTest;
 
-    const sock = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.DGRAM, std.posix.IPPROTO.UDP);
-    defer std.posix.close(sock);
+    const sock = try compat.socket(std.posix.AF.INET, std.posix.SOCK.DGRAM, std.posix.IPPROTO.UDP);
+    defer compat.close(sock);
 
-    const any = try std.net.Address.parseIp("127.0.0.1", 0);
-    try std.posix.bind(sock, &any.any, any.getOsSockLen());
+    const any = try compat.Address.parseIp("127.0.0.1", 0);
+    try compat.bind(sock, &any.any, any.getOsSockLen());
 }
 
 test {

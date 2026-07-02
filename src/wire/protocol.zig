@@ -16,34 +16,33 @@ pub const Protocol = enum(u8) {
 pub const ErrUnspecified = error{ProtocolUnspecified};
 
 /// Matches `protocol.WriteSelector`.
-pub fn writeSelectorByte(writer: anytype, p: Protocol) @TypeOf(writer).Error!void {
+pub fn writeSelectorByte(writer: *std.Io.Writer, p: Protocol) std.Io.Writer.Error!void {
     try writer.writeAll(&.{@intFromEnum(p)});
 }
 
 /// Matches `protocol.ReadSelector` (rejects `PROTOCOL_UNSPECIFIED`).
-pub fn readSelectorByte(reader: anytype) !Protocol {
+pub fn readSelectorByte(reader: *std.Io.Reader) !Protocol {
     var b: [1]u8 = undefined;
-    try reader.readNoEof(&b);
+    try reader.readSliceAll(&b);
     if (b[0] == 0) return error.ProtocolUnspecified;
     return @enumFromInt(b[0]);
 }
 
 test "selector byte matches reference (BCAST = 0x01)" {
-    var list = std.ArrayList(u8).empty;
-    defer list.deinit(std.testing.allocator);
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
     {
-        const w = list.writer(std.testing.allocator);
-        try writeSelectorByte(w, .bcast);
+        try writeSelectorByte(&aw.writer, .bcast);
     }
-    try std.testing.expectEqualSlices(u8, &.{0x01}, list.items);
+    try std.testing.expectEqualSlices(u8, &.{0x01}, aw.written());
 
-    var fbs = std.io.fixedBufferStream(list.items);
-    const p = try readSelectorByte(fbs.reader());
+    var fbs = std.Io.Reader.fixed(aw.written());
+    const p = try readSelectorByte(&fbs);
     try std.testing.expectEqual(Protocol.bcast, p);
 }
 
 test "readSelectorByte rejects unspecified" {
     var buf = [_]u8{0};
-    var fbs = std.io.fixedBufferStream(&buf);
-    try std.testing.expectError(error.ProtocolUnspecified, readSelectorByte(fbs.reader()));
+    var fbs = std.Io.Reader.fixed(&buf);
+    try std.testing.expectError(error.ProtocolUnspecified, readSelectorByte(&fbs));
 }

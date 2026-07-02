@@ -11,6 +11,7 @@
 //! `RsStrategy.chunkSent(..., false)` so inflight state matches a failed send.
 
 const std = @import("std");
+const compat = @import("compat");
 const broadcast_types = @import("../layer/broadcast_types.zig");
 const rs_init = @import("../layer/rs_init.zig");
 const rs_strategy = @import("../layer/rs_strategy.zig");
@@ -393,7 +394,7 @@ test "abstract RS mesh six nodes env stress (ZIG_ETHP2P_STRESS=1)" {
     if (builtin.os.tag == .windows) return;
 
     const gpa = std.testing.allocator;
-    const env = std.process.getEnvVarOwned(gpa, "ZIG_ETHP2P_STRESS") catch return;
+    const env = compat.getEnvVarOwned(gpa, "ZIG_ETHP2P_STRESS") catch return;
     defer gpa.free(env);
     if (!std.mem.eql(u8, env, "1")) return;
     var payload: [10 * 1024]u8 = undefined;
@@ -414,7 +415,7 @@ test "abstract RS mesh eight nodes ring env stress (large-network scale)" {
     if (builtin.os.tag == .windows) return;
 
     const gpa = std.testing.allocator;
-    const env = std.process.getEnvVarOwned(gpa, "ZIG_ETHP2P_STRESS") catch return;
+    const env = compat.getEnvVarOwned(gpa, "ZIG_ETHP2P_STRESS") catch return;
     defer gpa.free(env);
     if (!std.mem.eql(u8, env, "1")) return;
 
@@ -444,7 +445,7 @@ test "abstract RS mesh sixteen nodes ring env stress" {
     if (builtin.os.tag == .windows) return;
 
     const gpa = std.testing.allocator;
-    const env = std.process.getEnvVarOwned(gpa, "ZIG_ETHP2P_STRESS") catch return;
+    const env = compat.getEnvVarOwned(gpa, "ZIG_ETHP2P_STRESS") catch return;
     defer gpa.free(env);
     if (!std.mem.eql(u8, env, "1")) return;
 

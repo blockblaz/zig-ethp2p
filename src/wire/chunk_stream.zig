@@ -28,13 +28,13 @@ pub const ChunkIn = struct {
 /// Writes a full CHUNK uni stream: selector byte, length-framed protobuf
 /// `Chunk.Header`, then raw payload. Matches `PeerConn.doSendChunk`.
 pub fn writeChunkStream(
-    writer: anytype,
+    writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
     channel: []const u8,
     message_id: []const u8,
     chunk_id: []const u8,
     payload: []const u8,
-) (@TypeOf(writer).Error || frame.FrameError || std.mem.Allocator.Error || ChunkStreamError)!void {
+) (std.Io.Writer.Error || frame.FrameError || std.mem.Allocator.Error || ChunkStreamError)!void {
     if (payload.len > max_chunk_data_size) return error.ChunkPayloadTooLarge;
 
     try protocol.writeSelectorByte(writer, .chunk);
@@ -54,27 +54,27 @@ pub fn writeChunkStream(
 /// `Chunk.Header.chunk_id` carries `proto.Marshal(rspb.ChunkIdent{index})`, as in
 /// `broadcast/rs/types.go` `ChunkIdent.Marshal`.
 pub fn writeRsShardChunk(
-    writer: anytype,
+    writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
     channel: []const u8,
     message_id: []const u8,
     shard_index: i32,
     payload: []const u8,
-) (@TypeOf(writer).Error || frame.FrameError || std.mem.Allocator.Error || ChunkStreamError)!void {
+) (std.Io.Writer.Error || frame.FrameError || std.mem.Allocator.Error || ChunkStreamError)!void {
     const chunk_id = try rs.encodeChunkIdent(allocator, .{ .index = shard_index });
     defer allocator.free(chunk_id);
     try writeChunkStream(writer, allocator, channel, message_id, chunk_id, payload);
 }
 
 /// Reads selector, header frame, and payload. Caller must `ChunkIn.deinit`.
-pub fn readChunkStream(allocator: std.mem.Allocator, reader: anytype) !ChunkIn {
+pub fn readChunkStream(allocator: std.mem.Allocator, reader: *std.Io.Reader) !ChunkIn {
     const sel = try protocol.readSelectorByte(reader);
     if (sel != .chunk) return error.NotChunkStream;
     return readChunkAfterSelector(allocator, reader);
 }
 
 /// Reads header frame + payload when `PROTOCOL_CHUNK` was already read.
-pub fn readChunkAfterSelector(allocator: std.mem.Allocator, reader: anytype) !ChunkIn {
+pub fn readChunkAfterSelector(allocator: std.mem.Allocator, reader: *std.Io.Reader) !ChunkIn {
     const header_pb = try frame.readFrame(allocator, reader);
     errdefer allocator.free(header_pb);
 
@@ -86,7 +86,7 @@ pub fn readChunkAfterSelector(allocator: std.mem.Allocator, reader: anytype) !Ch
 
     const payload = try allocator.alloc(u8, header.data_length);
     errdefer allocator.free(payload);
-    try reader.readNoEof(payload);
+    try reader.readSliceAll(payload);
 
     return .{
         .header = header,
@@ -99,16 +99,15 @@ test "chunk stream golden matches reference encoder" {
     var golden_buf: [64]u8 = undefined;
     const golden = try std.fmt.hexToBytes(&golden_buf, "030000000b0a016312016d1a01092002aabb");
 
-    var list = std.ArrayList(u8).empty;
-    defer list.deinit(alloc);
+    var aw = std.Io.Writer.Allocating.init(alloc);
+    defer aw.deinit();
     {
-        const w = list.writer(alloc);
-        try writeChunkStream(w, alloc, "c", "m", &.{9}, &.{ 0xAA, 0xBB });
+        try writeChunkStream(&aw.writer, alloc, "c", "m", &.{9}, &.{ 0xAA, 0xBB });
     }
-    try std.testing.expectEqualSlices(u8, golden, list.items);
+    try std.testing.expectEqualSlices(u8, golden, aw.written());
 
-    var fbs = std.io.fixedBufferStream(list.items);
-    var got = try readChunkStream(alloc, fbs.reader());
+    var fbs = std.Io.Reader.fixed(aw.written());
+    var got = try readChunkStream(alloc, &fbs);
     defer got.deinit(alloc);
     try std.testing.expectEqualStrings("c", got.header.channel);
     try std.testing.expectEqualStrings("m", got.header.message_id);
@@ -122,16 +121,15 @@ test "rs shard chunk stream matches reference (ChunkIdent in header)" {
     var golden_buf: [64]u8 = undefined;
     const golden = try std.fmt.hexToBytes(&golden_buf, "030000000c0a016312016d1a0208072001ff");
 
-    var list = std.ArrayList(u8).empty;
-    defer list.deinit(alloc);
+    var aw = std.Io.Writer.Allocating.init(alloc);
+    defer aw.deinit();
     {
-        const w = list.writer(alloc);
-        try writeRsShardChunk(w, alloc, "c", "m", 7, &.{0xFF});
+        try writeRsShardChunk(&aw.writer, alloc, "c", "m", 7, &.{0xFF});
     }
-    try std.testing.expectEqualSlices(u8, golden, list.items);
+    try std.testing.expectEqualSlices(u8, golden, aw.written());
 
-    var fbs = std.io.fixedBufferStream(list.items);
-    var got = try readChunkStream(alloc, fbs.reader());
+    var fbs = std.Io.Reader.fixed(aw.written());
+    var got = try readChunkStream(alloc, &fbs);
     defer got.deinit(alloc);
     const ident = try rs.decodeChunkIdent(alloc, got.header.chunk_id);
     try std.testing.expectEqual(@as(i32, 7), ident.index);
@@ -142,8 +140,8 @@ test "readChunkAfterSelector matches processChunk framing" {
     // After selector 0x03: framed header + payload only
     var golden_buf: [64]u8 = undefined;
     const after_sel = try std.fmt.hexToBytes(&golden_buf, "0000000b0a016312016d1a01092002aabb");
-    var fbs = std.io.fixedBufferStream(after_sel);
-    var got = try readChunkAfterSelector(alloc, fbs.reader());
+    var fbs = std.Io.Reader.fixed(after_sel);
+    var got = try readChunkAfterSelector(alloc, &fbs);
     defer got.deinit(alloc);
     try std.testing.expectEqualSlices(u8, &.{ 0xAA, 0xBB }, got.payload);
 }

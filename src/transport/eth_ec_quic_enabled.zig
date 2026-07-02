@@ -1,6 +1,7 @@
 //! QUIC + TLS implementation (`src/transport/zquic_quic_shim.zig` + [zquic](https://github.com/ch4r10t33r/zquic)).
 
 const std = @import("std");
+const compat = @import("compat");
 const quic = @import("quic");
 const common = @import("eth_ec_quic_common.zig");
 const test_certs = @import("eth_ec_quic_test_certs.zig");
@@ -106,7 +107,7 @@ pub fn listenImpl(
 pub fn listenImplFromFd(
     allocator: *std.mem.Allocator,
     fd: std.posix.fd_t,
-    local_addr: std.net.Address,
+    local_addr: compat.Address,
     config: common.EthEcQuicConfig,
 ) !*quic.QuicEndpoint {
     if (config.server_certificate_pem_path == null or config.server_private_key_pem_path == null) {
@@ -155,7 +156,7 @@ test "QUIC listen + dial, TLS handshake, ALPN eth-ec-broadcast" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     if (@import("builtin").os.tag == .wasi) return error.SkipZigTest;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var alloc = gpa.allocator();
 
@@ -238,7 +239,7 @@ test "QUIC UNI streams: symmetric BCAST handshake + SESS session_open (wire fram
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     if (@import("builtin").os.tag == .wasi) return error.SkipZigTest;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var alloc = gpa.allocator();
 
@@ -304,47 +305,45 @@ test "QUIC UNI streams: symmetric BCAST handshake + SESS session_open (wire fram
     const cli_bcast_out = try quic.streamMakeUni(conn, srv);
     const srv_bcast_out = try quic.streamMakeUni(sc, client_ep);
 
-    var cli_bcast_payload = std.ArrayList(u8).empty;
-    defer cli_bcast_payload.deinit(alloc);
+    var cli_bcast_payload = std.Io.Writer.Allocating.init(alloc);
+    defer cli_bcast_payload.deinit();
     {
-        const w = cli_bcast_payload.writer(alloc);
-        try bcast_stream.writeBcastHandshakeOpen(w, alloc, .{
+        try bcast_stream.writeBcastHandshakeOpen(&cli_bcast_payload.writer, alloc, .{
             .version = 1,
             .channels = &.{ "blocks", "atts" },
             .peer_id = "client-peer",
         });
     }
-    try quic.streamQueueWrite(cli_bcast_out, cli_bcast_payload.items);
+    try quic.streamQueueWrite(cli_bcast_out, cli_bcast_payload.written());
     try quic.streamDrainWrites(cli_bcast_out, srv, 10_000);
 
-    var srv_bcast_payload = std.ArrayList(u8).empty;
-    defer srv_bcast_payload.deinit(alloc);
+    var srv_bcast_payload = std.Io.Writer.Allocating.init(alloc);
+    defer srv_bcast_payload.deinit();
     {
-        const w = srv_bcast_payload.writer(alloc);
-        try bcast_stream.writeBcastHandshakeOpen(w, alloc, .{
+        try bcast_stream.writeBcastHandshakeOpen(&srv_bcast_payload.writer, alloc, .{
             .version = 1,
             .channels = &.{"chunks"},
             .peer_id = "server-peer",
         });
     }
-    try quic.streamQueueWrite(srv_bcast_out, srv_bcast_payload.items);
+    try quic.streamQueueWrite(srv_bcast_out, srv_bcast_payload.written());
     try quic.streamDrainWrites(srv_bcast_out, client_ep, 10_000);
 
     // Accept the peer's inbound BCAST UNI stream on each side.
     const srv_bcast_in = try acceptIncomingQuicUniStream(sc, srv, client_ep);
     const cli_bcast_in = try acceptIncomingQuicUniStream(conn, client_ep, srv);
 
-    try waitQuicStreamBytes(srv_bcast_in, srv, client_ep, cli_bcast_payload.items.len, 10_000);
-    try waitQuicStreamBytes(cli_bcast_in, client_ep, srv, srv_bcast_payload.items.len, 10_000);
+    try waitQuicStreamBytes(srv_bcast_in, srv, client_ep, cli_bcast_payload.written().len, 10_000);
+    try waitQuicStreamBytes(cli_bcast_in, client_ep, srv, srv_bcast_payload.written().len, 10_000);
 
-    try std.testing.expectEqualSlices(u8, cli_bcast_payload.items, quic.streamReadSlice(srv_bcast_in));
-    try std.testing.expectEqualSlices(u8, srv_bcast_payload.items, quic.streamReadSlice(cli_bcast_in));
+    try std.testing.expectEqualSlices(u8, cli_bcast_payload.written(), quic.streamReadSlice(srv_bcast_in));
+    try std.testing.expectEqualSlices(u8, srv_bcast_payload.written(), quic.streamReadSlice(cli_bcast_in));
 
     // Decode the client's BCAST handshake as seen by the server.
     const bcast_copy = try alloc.dupe(u8, quic.streamReadSlice(srv_bcast_in));
     defer alloc.free(bcast_copy);
-    var bcast_fbs = std.io.fixedBufferStream(bcast_copy);
-    var hs_owned = try bcast_stream.readBcastPeerHandshake(alloc, bcast_fbs.reader());
+    var bcast_fbs = std.Io.Reader.fixed(bcast_copy);
+    var hs_owned = try bcast_stream.readBcastPeerHandshake(alloc, &bcast_fbs);
     defer hs_owned.deinit(alloc);
     switch (hs_owned) {
         .peer_handshake => |h| {
@@ -357,30 +356,29 @@ test "QUIC UNI streams: symmetric BCAST handshake + SESS session_open (wire fram
     // --- SESS UNI stream (peer_ctrl.go handleSessionOpen) ---
     // Client opens a SESS UNI stream and writes session_open.
     const cli_sess = try quic.streamMakeUni(conn, srv);
-    var sess_payload = std.ArrayList(u8).empty;
-    defer sess_payload.deinit(alloc);
+    var sess_payload = std.Io.Writer.Allocating.init(alloc);
+    defer sess_payload.deinit();
     {
-        const w = sess_payload.writer(alloc);
-        try sess_stream.writeSessSessionOpen(w, alloc, .{
+        try sess_stream.writeSessSessionOpen(&sess_payload.writer, alloc, .{
             .channel = "ch1",
             .message_id = "mid",
             .preamble = &.{ 1, 2, 3 },
             .initial_update = &.{ 4, 5 },
         });
     }
-    try quic.streamQueueWrite(cli_sess, sess_payload.items);
+    try quic.streamQueueWrite(cli_sess, sess_payload.written());
     try quic.streamDrainWrites(cli_sess, srv, 10_000);
 
     // Server accepts the SESS UNI stream (peer_in.go runAcceptLoop).
     const srv_sess = try acceptIncomingQuicUniStream(sc, srv, client_ep);
-    try waitQuicStreamBytes(srv_sess, srv, client_ep, sess_payload.items.len, 10_000);
-    try std.testing.expectEqualSlices(u8, sess_payload.items, quic.streamReadSlice(srv_sess));
+    try waitQuicStreamBytes(srv_sess, srv, client_ep, sess_payload.written().len, 10_000);
+    try std.testing.expectEqualSlices(u8, sess_payload.written(), quic.streamReadSlice(srv_sess));
 
     // Decode SESS session_open frame.
     const sess_copy = try alloc.dupe(u8, quic.streamReadSlice(srv_sess));
     defer alloc.free(sess_copy);
-    var sess_fbs = std.io.fixedBufferStream(sess_copy);
-    const sess_r = sess_fbs.reader();
+    var sess_fbs = std.Io.Reader.fixed(sess_copy);
+    const sess_r = &sess_fbs;
     const sel = try protocol.readSelectorByte(sess_r);
     try std.testing.expectEqual(protocol.Protocol.sess, sel);
     var open_owned = try sess_stream.readSessSessionOpenAfterSelector(alloc, sess_r);
@@ -402,7 +400,7 @@ test "QUIC EngineQuicHost SESS session_open + CHUNK relay ingest" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     if (@import("builtin").os.tag == .wasi) return error.SkipZigTest;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var alloc = gpa.allocator();
 
@@ -494,30 +492,28 @@ test "QUIC EngineQuicHost SESS session_open + CHUNK relay ingest" {
         .peer_id = "client-peer",
     });
 
-    var srv_bcast_payload = std.ArrayList(u8).empty;
-    defer srv_bcast_payload.deinit(alloc);
+    var srv_bcast_payload = std.Io.Writer.Allocating.init(alloc);
+    defer srv_bcast_payload.deinit();
     {
-        const w = srv_bcast_payload.writer(alloc);
-        try bcast_stream.writeBcastHandshakeOpen(w, alloc, .{
+        try bcast_stream.writeBcastHandshakeOpen(&srv_bcast_payload.writer, alloc, .{
             .version = 1,
             .channels = &.{"ch1"},
             .peer_id = "server-peer",
         });
     }
-    try quic.streamQueueWrite(host.peer.bcast_out.?, srv_bcast_payload.items);
+    try quic.streamQueueWrite(host.peer.bcast_out.?, srv_bcast_payload.written());
     try quic.streamDrainWrites(host.peer.bcast_out.?, client_ep, 10_000);
 
-    var cli_bcast_payload = std.ArrayList(u8).empty;
-    defer cli_bcast_payload.deinit(alloc);
+    var cli_bcast_payload = std.Io.Writer.Allocating.init(alloc);
+    defer cli_bcast_payload.deinit();
     {
-        const w = cli_bcast_payload.writer(alloc);
-        try bcast_stream.writeBcastHandshakeOpen(w, alloc, .{
+        try bcast_stream.writeBcastHandshakeOpen(&cli_bcast_payload.writer, alloc, .{
             .version = 1,
             .channels = &.{"ch1"},
             .peer_id = "client-peer",
         });
     }
-    try quic.streamQueueWrite(cli_pc.bcast_out.?, cli_bcast_payload.items);
+    try quic.streamQueueWrite(cli_pc.bcast_out.?, cli_bcast_payload.written());
     try quic.streamDrainWrites(cli_pc.bcast_out.?, srv, 10_000);
 
     rounds = 0;
@@ -553,18 +549,17 @@ test "QUIC EngineQuicHost SESS session_open + CHUNK relay ingest" {
     defer alloc.free(pre_bytes);
 
     const cli_sess = try quic.streamMakeUni(conn, srv);
-    var sess_pl = std.ArrayList(u8).empty;
-    defer sess_pl.deinit(alloc);
+    var sess_pl = std.Io.Writer.Allocating.init(alloc);
+    defer sess_pl.deinit();
     {
-        const w = sess_pl.writer(alloc);
-        try sess_stream.writeSessSessionOpen(w, alloc, .{
+        try sess_stream.writeSessSessionOpen(&sess_pl.writer, alloc, .{
             .channel = "ch1",
             .message_id = "m1",
             .preamble = pre_bytes,
             .initial_update = &.{},
         });
     }
-    try quic.streamQueueWrite(cli_sess, sess_pl.items);
+    try quic.streamQueueWrite(cli_sess, sess_pl.written());
     try quic.streamDrainWrites(cli_sess, srv, 10_000);
 
     rounds = 0;
@@ -577,13 +572,12 @@ test "QUIC EngineQuicHost SESS session_open + CHUNK relay ingest" {
     try std.testing.expect(ch.sessionStrategy("m1") != null);
 
     const cli_chunk = try quic.streamMakeUni(conn, srv);
-    var chunk_pl = std.ArrayList(u8).empty;
-    defer chunk_pl.deinit(alloc);
+    var chunk_pl = std.Io.Writer.Allocating.init(alloc);
+    defer chunk_pl.deinit();
     {
-        const w = chunk_pl.writer(alloc);
-        try chunk_stream.writeRsShardChunk(w, alloc, "ch1", "m1", 0, origin.chunks[0]);
+        try chunk_stream.writeRsShardChunk(&chunk_pl.writer, alloc, "ch1", "m1", 0, origin.chunks[0]);
     }
-    try quic.streamQueueWrite(cli_chunk, chunk_pl.items);
+    try quic.streamQueueWrite(cli_chunk, chunk_pl.written());
     try quic.streamDrainWrites(cli_chunk, srv, 10_000);
 
     rounds = 0;
@@ -607,7 +601,7 @@ test "QUIC origin RS outbound CHUNK (peerSendRsChunk + sessionDrainOutboundOverQ
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     if (@import("builtin").os.tag == .wasi) return error.SkipZigTest;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var alloc = gpa.allocator();
 
@@ -699,30 +693,28 @@ test "QUIC origin RS outbound CHUNK (peerSendRsChunk + sessionDrainOutboundOverQ
         .peer_id = "client-peer",
     });
 
-    var srv_bcast_payload = std.ArrayList(u8).empty;
-    defer srv_bcast_payload.deinit(alloc);
+    var srv_bcast_payload = std.Io.Writer.Allocating.init(alloc);
+    defer srv_bcast_payload.deinit();
     {
-        const w = srv_bcast_payload.writer(alloc);
-        try bcast_stream.writeBcastHandshakeOpen(w, alloc, .{
+        try bcast_stream.writeBcastHandshakeOpen(&srv_bcast_payload.writer, alloc, .{
             .version = 1,
             .channels = &.{"ch1"},
             .peer_id = "server-peer",
         });
     }
-    try quic.streamQueueWrite(host.peer.bcast_out.?, srv_bcast_payload.items);
+    try quic.streamQueueWrite(host.peer.bcast_out.?, srv_bcast_payload.written());
     try quic.streamDrainWrites(host.peer.bcast_out.?, client_ep, 10_000);
 
-    var cli_bcast_payload = std.ArrayList(u8).empty;
-    defer cli_bcast_payload.deinit(alloc);
+    var cli_bcast_payload = std.Io.Writer.Allocating.init(alloc);
+    defer cli_bcast_payload.deinit();
     {
-        const w = cli_bcast_payload.writer(alloc);
-        try bcast_stream.writeBcastHandshakeOpen(w, alloc, .{
+        try bcast_stream.writeBcastHandshakeOpen(&cli_bcast_payload.writer, alloc, .{
             .version = 1,
             .channels = &.{"ch1"},
             .peer_id = "client-peer",
         });
     }
-    try quic.streamQueueWrite(cli_pc.bcast_out.?, cli_bcast_payload.items);
+    try quic.streamQueueWrite(cli_pc.bcast_out.?, cli_bcast_payload.written());
     try quic.streamDrainWrites(cli_pc.bcast_out.?, srv, 10_000);
 
     rounds = 0;
@@ -785,8 +777,8 @@ test "QUIC origin RS outbound CHUNK (peerSendRsChunk + sessionDrainOutboundOverQ
     const raw_in = quic.streamReadSlice(ust);
     try std.testing.expect(raw_in.len > 0);
 
-    var fbs = std.io.fixedBufferStream(raw_in);
-    var cin = try chunk_stream.readChunkStream(alloc, fbs.reader());
+    var fbs = std.Io.Reader.fixed(raw_in);
+    var cin = try chunk_stream.readChunkStream(alloc, &fbs);
     defer cin.deinit(alloc);
     try std.testing.expectEqualStrings("ch1", cin.header.channel);
     try std.testing.expectEqualStrings("m1", cin.header.message_id);

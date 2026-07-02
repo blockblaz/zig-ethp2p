@@ -8,6 +8,7 @@
 //! Packets are encrypted with AES-128-GCM.
 
 const std = @import("std");
+const compat = @import("compat");
 
 const aes_gcm = std.crypto.aead.aes_gcm.Aes128Gcm;
 const hkdf = std.crypto.kdf.hkdf.HkdfSha256;
@@ -168,7 +169,9 @@ pub fn generateEphemeralKeypair(
     privkey_out: *[privkey_len]u8,
     pubkey_out: *[pubkey_len]u8,
 ) Secp256k1Error!void {
-    const kp = EcdsaK.KeyPair.generate();
+    var seed: [EcdsaK.KeyPair.seed_length]u8 = undefined;
+    compat.random.bytes(&seed);
+    const kp = EcdsaK.KeyPair.generateDeterministic(seed) catch return error.Secp256k1Error;
     privkey_out.* = kp.secret_key.toBytes();
     pubkey_out.* = kp.public_key.toCompressedSec1();
 }

@@ -134,7 +134,7 @@ fn decodeReqId(item: []const u8) DecodeError!u64 {
 // ---------------------------------------------------------------------------
 
 pub fn encodePing(allocator: std.mem.Allocator, msg: Ping) EncodeError![]u8 {
-    var items = std.ArrayListUnmanaged([]u8){};
+    var items = std.ArrayListUnmanaged([]u8).empty;
     defer {
         for (items.items) |it| allocator.free(it);
         items.deinit(allocator);
@@ -173,7 +173,7 @@ pub fn decodePing(allocator: std.mem.Allocator, data: []const u8) DecodeError!Pi
 // ---------------------------------------------------------------------------
 
 pub fn encodePong(allocator: std.mem.Allocator, msg: Pong) EncodeError![]u8 {
-    var items = std.ArrayListUnmanaged([]u8){};
+    var items = std.ArrayListUnmanaged([]u8).empty;
     defer {
         for (items.items) |it| allocator.free(it);
         items.deinit(allocator);
@@ -226,7 +226,7 @@ pub fn decodePong(allocator: std.mem.Allocator, data: []const u8) (DecodeError |
 // ---------------------------------------------------------------------------
 
 pub fn encodeFindNode(allocator: std.mem.Allocator, msg: FindNode) EncodeError![]u8 {
-    var items = std.ArrayListUnmanaged([]u8){};
+    var items = std.ArrayListUnmanaged([]u8).empty;
     defer {
         for (items.items) |it| allocator.free(it);
         items.deinit(allocator);
@@ -235,7 +235,7 @@ pub fn encodeFindNode(allocator: std.mem.Allocator, msg: FindNode) EncodeError![
     try appendOwned(&items, allocator, try encodeReqId(allocator, msg.request_id));
 
     // distances is a list of u8 values.
-    var dist_items = std.ArrayListUnmanaged([]u8){};
+    var dist_items = std.ArrayListUnmanaged([]u8).empty;
     defer {
         for (dist_items.items) |it| allocator.free(it);
         dist_items.deinit(allocator);
@@ -264,7 +264,7 @@ pub fn decodeFindNode(allocator: std.mem.Allocator, data: []const u8) (DecodeErr
     const dists_item = try rlpDecode(rest);
     const dists_payload = try enr_mod.rlpListPayload(dists_item.item);
 
-    var dist_list = std.ArrayListUnmanaged(u8){};
+    var dist_list = std.ArrayListUnmanaged(u8).empty;
     errdefer dist_list.deinit(allocator);
     var dr = dists_payload;
     while (dr.len > 0) {
@@ -288,7 +288,7 @@ pub fn freeFindNode(allocator: std.mem.Allocator, msg: FindNode) void {
 // ---------------------------------------------------------------------------
 
 pub fn encodeNodes(allocator: std.mem.Allocator, msg: Nodes) EncodeError![]u8 {
-    var items = std.ArrayListUnmanaged([]u8){};
+    var items = std.ArrayListUnmanaged([]u8).empty;
     defer {
         for (items.items) |it| allocator.free(it);
         items.deinit(allocator);
@@ -297,7 +297,7 @@ pub fn encodeNodes(allocator: std.mem.Allocator, msg: Nodes) EncodeError![]u8 {
     try appendOwned(&items, allocator, try encodeReqId(allocator, msg.request_id));
     try appendOwned(&items, allocator, try rlpEncodeUint64(allocator, msg.total));
 
-    var enr_items = std.ArrayListUnmanaged([]u8){};
+    var enr_items = std.ArrayListUnmanaged([]u8).empty;
     defer {
         for (enr_items.items) |it| allocator.free(it);
         enr_items.deinit(allocator);
@@ -328,7 +328,7 @@ pub fn decodeNodes(allocator: std.mem.Allocator, data: []const u8) (DecodeError 
     const enrs_item = try rlpDecode(rest);
     const enrs_payload = try enr_mod.rlpListPayload(enrs_item.item);
 
-    var enr_list = std.ArrayListUnmanaged([]const u8){};
+    var enr_list = std.ArrayListUnmanaged([]const u8).empty;
     errdefer {
         for (enr_list.items) |e| allocator.free(e);
         enr_list.deinit(allocator);
@@ -361,7 +361,7 @@ pub fn freeNodes(allocator: std.mem.Allocator, msg: Nodes) void {
 // ---------------------------------------------------------------------------
 
 pub fn encodeTalkReq(allocator: std.mem.Allocator, msg: TalkReq) EncodeError![]u8 {
-    var items = std.ArrayListUnmanaged([]u8){};
+    var items = std.ArrayListUnmanaged([]u8).empty;
     defer {
         for (items.items) |it| allocator.free(it);
         items.deinit(allocator);
@@ -408,7 +408,7 @@ pub fn freeTalkReq(allocator: std.mem.Allocator, msg: TalkReq) void {
 // ---------------------------------------------------------------------------
 
 pub fn encodeTalkRes(allocator: std.mem.Allocator, msg: TalkRes) EncodeError![]u8 {
-    var items = std.ArrayListUnmanaged([]u8){};
+    var items = std.ArrayListUnmanaged([]u8).empty;
     defer {
         for (items.items) |it| allocator.free(it);
         items.deinit(allocator);

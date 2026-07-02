@@ -33,7 +33,7 @@ test "encodeAndFanout roundtrip through mesh" {
     const app = [_]u8{ 1, 2, 3, 4 };
     try encodeAndFanout(&mesh, gpa, "alice", topic, "mid-z", &app);
 
-    var bob_inbox: std.ArrayListUnmanaged([]u8) = .{};
+    var bob_inbox: std.ArrayListUnmanaged([]u8) = .empty;
     defer {
         for (bob_inbox.items) |s| gpa.free(s);
         bob_inbox.deinit(gpa);

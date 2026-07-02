@@ -11,7 +11,7 @@ pub const VerifyRecord = struct {
 };
 
 pub const VerifyQueue = struct {
-    items: std.ArrayListUnmanaged(VerifyRecord) = .{},
+    items: std.ArrayListUnmanaged(VerifyRecord) = .empty,
 
     pub fn deinit(self: *VerifyQueue, allocator: Allocator) void {
         self.items.deinit(allocator);

@@ -2,6 +2,7 @@
 //! Implemented with pure-Zig [zquic](https://github.com/ch4r10t33r/zquic) (TLS 1.3 + QUIC).
 
 const std = @import("std");
+const compat = @import("compat");
 const posix = std.posix;
 
 const zquic = @import("zquic");
@@ -26,8 +27,8 @@ pub fn logInit(_: []const u8) void {
 pub const QuicEndpoint = struct {
     allocator: *std.mem.Allocator,
     is_server: bool,
-    local_addr: std.net.Address,
-    resolved_local: ?std.net.Address = null,
+    local_addr: compat.Address,
+    resolved_local: ?compat.Address = null,
     accept_queue: std.ArrayListUnmanaged(*QuicConnection),
     connect_slot: ?*QuicConnection,
     first_alpn: []const u8,
@@ -43,28 +44,28 @@ pub const QuicEndpoint = struct {
     client_host_storage: ?[]u8 = null,
     sock: posix.socket_t = -1,
 
-    fn isWildcardLocal(addr: std.net.Address) bool {
+    fn isWildcardLocal(addr: compat.Address) bool {
         return switch (addr.any.family) {
             posix.AF.INET => {
-                const b: *const [4]u8 = @ptrCast(&addr.in.sa.addr);
+                const b: *const [4]u8 = @ptrCast(&addr.in.addr);
                 return std.mem.allEqual(u8, b, 0);
             },
             posix.AF.INET6 => {
-                const b: *const [16]u8 = @ptrCast(&addr.in6.sa.addr);
+                const b: *const [16]u8 = @ptrCast(&addr.in6.addr);
                 return std.mem.allEqual(u8, b, 0);
             },
             else => false,
         };
     }
 
-    fn resolveLocalForWildcard(local: std.net.Address, remote: std.net.Address) std.net.Address {
+    fn resolveLocalForWildcard(local: compat.Address, remote: compat.Address) compat.Address {
         if (!isWildcardLocal(local)) return local;
-        const sock = posix.socket(remote.any.family, posix.SOCK.DGRAM, posix.IPPROTO.UDP) catch return local;
-        defer posix.close(sock);
-        posix.connect(sock, &remote.any, remote.getOsSockLen()) catch return local;
-        var resolved: std.net.Address = undefined;
-        var len: posix.socklen_t = @sizeOf(std.net.Address);
-        posix.getsockname(sock, &resolved.any, &len) catch return local;
+        const sock = compat.socket(remote.any.family, posix.SOCK.DGRAM, posix.IPPROTO.UDP) catch return local;
+        defer compat.close(sock);
+        compat.connect(sock, &remote.any, remote.getOsSockLen()) catch return local;
+        var resolved: compat.Address = undefined;
+        var len: posix.socklen_t = @sizeOf(compat.Address);
+        compat.getsockname(sock, &resolved.any, &len) catch return local;
         resolved.setPort(local.getPort());
         return resolved;
     }
@@ -82,9 +83,9 @@ pub const QuicEndpoint = struct {
 
     fn recvOneIfAvailable(self: *QuicEndpoint) !bool {
         var buf: [65536]u8 = undefined;
-        var peer: std.net.Address = undefined;
-        var peer_len: posix.socklen_t = @sizeOf(std.net.Address);
-        const n = posix.recvfrom(self.sock, &buf, 0, &peer.any, &peer_len) catch |err| switch (err) {
+        var peer: compat.Address = undefined;
+        var peer_len: posix.socklen_t = @sizeOf(compat.Address);
+        const n = compat.recvfrom(self.sock, &buf, 0, &peer.any, &peer_len) catch |err| switch (err) {
             error.WouldBlock => return false,
             else => |e| return e,
         };
@@ -96,7 +97,7 @@ pub const QuicEndpoint = struct {
                     self.resolved_local = resolveLocalForWildcard(self.local_addr, peer);
                 }
             }
-            srv.feedPacket(buf[0..n], peer);
+            srv.feedPacket(buf[0..n], @bitCast(peer));
             srv.processPendingWork();
         } else if (self.client) |cli| {
             cli.feedPacket(buf[0..n]);
@@ -112,7 +113,7 @@ pub const QuicEndpoint = struct {
     fn scanServerAcceptsAndStreams(self: *QuicEndpoint) void {
         const srv = self.server orelse return;
         for (&srv.conns, 0..) |*slot, i| {
-            if (slot.*) |*conn| {
+            if (slot.*) |conn| {
                 if (conn.phase == .connected and conn.has_app_keys) {
                     if (self.server_conn_handles[i] == null) {
                         const qc = self.allocator.create(QuicConnection) catch continue;
@@ -166,9 +167,9 @@ pub const QuicConnection = struct {
             .server = ep.server,
             .server_slot = slot,
             .client = null,
-            .incoming_streams = .{},
-            .incoming_uni_streams = .{},
-            .streams_owned = .{},
+            .incoming_streams = .empty,
+            .incoming_uni_streams = .empty,
+            .streams_owned = .empty,
             .dispatched_incoming = std.AutoHashMap(u64, void).init(ep.allocator.*),
         };
     }
@@ -193,9 +194,9 @@ pub const QuicConnection = struct {
             .server = null,
             .server_slot = null,
             .client = cli,
-            .incoming_streams = .{},
-            .incoming_uni_streams = .{},
-            .streams_owned = .{},
+            .incoming_streams = .empty,
+            .incoming_uni_streams = .empty,
+            .streams_owned = .empty,
             .dispatched_incoming = std.AutoHashMap(u64, void).init(ep.allocator.*),
         };
     }
@@ -204,7 +205,7 @@ pub const QuicConnection = struct {
         if (self.is_client) return &self.client.?.conn;
         const srv = self.server orelse return null;
         const si = self.server_slot orelse return null;
-        if (srv.conns[si]) |*c| return c;
+        if (srv.conns[si]) |c| return c;
         return null;
     }
 
@@ -215,7 +216,7 @@ pub const QuicConnection = struct {
         }
         const srv = self.server orelse return null;
         const si = self.server_slot orelse return null;
-        if (srv.conns[si]) |*c| return c;
+        if (srv.conns[si]) |c| return c;
         return null;
     }
 
@@ -271,8 +272,8 @@ pub const QuicConnection = struct {
         st.* = .{
             .conn = self,
             .stream_id = sid,
-            .read_buf = .{},
-            .write_buf = .{},
+            .read_buf = .empty,
+            .write_buf = .empty,
             .write_off = 0,
             .is_incoming = true,
         };
@@ -300,18 +301,18 @@ pub const QuicConnection = struct {
 
 pub const QuicStream = QuicConnection.Stream;
 
-fn parseBindAddr(s: []const u8) !std.net.Address {
+fn parseBindAddr(s: []const u8) !compat.Address {
     const colon = std.mem.lastIndexOfScalar(u8, s, ':') orelse return error.BadAddress;
     const host = s[0..colon];
     const port = try std.fmt.parseInt(u16, s[colon + 1 ..], 10);
     if (host.len >= 2 and host[0] == '[' and host[host.len - 1] == ']') {
-        return try std.net.Address.parseIp(host[1 .. host.len - 1], port);
+        return try compat.Address.parseIp(host[1 .. host.len - 1], port);
     }
-    return try std.net.Address.parseIp(host, port);
+    return try compat.Address.parseIp(host, port);
 }
 
 fn resolveRepoPath(allocator: std.mem.Allocator, rel: []const u8) ![]const u8 {
-    const cwd = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const cwd = try compat.getCwdAlloc(allocator);
     defer allocator.free(cwd);
     return std.fs.path.resolve(allocator, &.{ cwd, rel });
 }
@@ -333,15 +334,15 @@ pub fn endpointInit(allocator: *std.mem.Allocator, bind_s: []const u8, qc: *Quic
         const key_abs = try resolveRepoPath(allocator.*, key_path);
         errdefer allocator.free(key_abs);
 
-        const sock = try posix.socket(addr.any.family, posix.SOCK.DGRAM | posix.SOCK.NONBLOCK, posix.IPPROTO.UDP);
-        errdefer posix.close(sock);
+        const sock = try compat.socket(addr.any.family, posix.SOCK.DGRAM | posix.SOCK.NONBLOCK, posix.IPPROTO.UDP);
+        errdefer compat.close(sock);
         const reuse: c_int = 1;
         try posix.setsockopt(sock, posix.SOL.SOCKET, posix.SO.REUSEADDR, std.mem.asBytes(&reuse));
-        try posix.bind(sock, &addr.any, addr.getOsSockLen());
+        try compat.bind(sock, &addr.any, addr.getOsSockLen());
 
-        var local_addr: std.net.Address = undefined;
-        var la_len: posix.socklen_t = @sizeOf(std.net.Address);
-        try posix.getsockname(sock, &local_addr.any, &la_len);
+        var local_addr: compat.Address = undefined;
+        var la_len: posix.socklen_t = @sizeOf(compat.Address);
+        try compat.getsockname(sock, &local_addr.any, &la_len);
 
         const scfg = io.ServerConfig{
             .port = addr.getPort(),
@@ -358,7 +359,7 @@ pub fn endpointInit(allocator: *std.mem.Allocator, bind_s: []const u8, qc: *Quic
             .allocator = allocator,
             .is_server = true,
             .local_addr = local_addr,
-            .accept_queue = .{},
+            .accept_queue = .empty,
             .connect_slot = null,
             .first_alpn = first_alpn,
             .base_plpmtu = @truncate(qc.max_udp_payload),
@@ -371,16 +372,20 @@ pub fn endpointInit(allocator: *std.mem.Allocator, bind_s: []const u8, qc: *Quic
         return ep;
     }
 
-    const sock = try posix.socket(posix.AF.INET, posix.SOCK.DGRAM | posix.SOCK.NONBLOCK, posix.IPPROTO.UDP);
-    errdefer posix.close(sock);
-    try posix.bind(sock, &addr.any, addr.getOsSockLen());
-    var local_addr: std.net.Address = undefined;
-    var la_len: posix.socklen_t = @sizeOf(std.net.Address);
-    try posix.getsockname(sock, &local_addr.any, &la_len);
+    const sock = try compat.socket(posix.AF.INET, posix.SOCK.DGRAM | posix.SOCK.NONBLOCK, posix.IPPROTO.UDP);
+    errdefer compat.close(sock);
+    try compat.bind(sock, &addr.any, addr.getOsSockLen());
+    var local_addr: compat.Address = undefined;
+    var la_len: posix.socklen_t = @sizeOf(compat.Address);
+    try compat.getsockname(sock, &local_addr.any, &la_len);
 
     const cli = try allocator.create(io.Client);
     errdefer allocator.destroy(cli);
-    cli.* = try io.Client.initFromSocket(allocator.*, .{
+    // `Client` is a large struct; `initFromSocket` returns it by value (a huge
+    // stack copy that overflows). The socket is already bound above, so use the
+    // bound-socket in-place variant (which does not re-bind) to build directly
+    // into the heap allocation.
+    try io.Client.initFromBoundSocketInPlace(allocator.*, .{
         .host = "127.0.0.1",
         .port = 443,
         .urls = &.{},
@@ -388,13 +393,13 @@ pub fn endpointInit(allocator: *std.mem.Allocator, bind_s: []const u8, qc: *Quic
         .raw_application_streams = true,
         .http09 = false,
         .http3 = false,
-    }, sock, true);
+    }, sock, cli);
 
     ep.* = .{
         .allocator = allocator,
         .is_server = false,
         .local_addr = local_addr,
-        .accept_queue = .{},
+        .accept_queue = .empty,
         .connect_slot = null,
         .first_alpn = first_alpn,
         .base_plpmtu = @truncate(qc.max_udp_payload),
@@ -436,7 +441,7 @@ pub fn endpointDeinit(ep: *QuicEndpoint) void {
 pub fn endpointInitFromFd(
     allocator: *std.mem.Allocator,
     sock: posix.socket_t,
-    local_addr: std.net.Address,
+    local_addr: compat.Address,
     qc: *QuicConfig,
 ) !*QuicEndpoint {
     const first_alpn = qc.alpn.*[0];
@@ -463,7 +468,7 @@ pub fn endpointInitFromFd(
         .allocator = allocator,
         .is_server = true,
         .local_addr = local_addr,
-        .accept_queue = .{},
+        .accept_queue = .empty,
         .connect_slot = null,
         .first_alpn = first_alpn,
         .base_plpmtu = @truncate(qc.max_udp_payload),
@@ -476,10 +481,10 @@ pub fn endpointInitFromFd(
     return ep;
 }
 
-pub fn feedPacket(ep: *QuicEndpoint, data: []const u8, peer: std.net.Address, local: std.net.Address) void {
+pub fn feedPacket(ep: *QuicEndpoint, data: []const u8, peer: compat.Address, local: compat.Address) void {
     _ = local;
     if (ep.server) |srv| {
-        srv.feedPacket(data, peer);
+        srv.feedPacket(data, @bitCast(peer));
         srv.processPendingWork();
     }
     ep.scanServerAcceptsAndStreams();
@@ -503,9 +508,9 @@ pub fn connect(ep: *QuicEndpoint, remote_s: []const u8, hostname: []const u8) !*
     ep.client_host_storage = try ep.allocator.dupe(u8, hostname);
     cli.config.host = ep.client_host_storage.?;
     cli.config.port = remote.getPort();
-    cli.conn.peer = remote;
+    cli.conn.peer = @bitCast(remote);
 
-    try cli.startHandshake(remote);
+    try cli.startHandshake(@bitCast(remote));
 
     const qc = try ep.allocator.create(QuicConnection);
     qc.* = QuicConnection.initClient(ep, cli);
@@ -532,7 +537,7 @@ pub fn poll(ep: *QuicEndpoint, timeout_ms: u32) !void {
     }
     ep.scanServerAcceptsAndStreams();
     if (timeout_ms == 0) {
-        std.Thread.sleep(50 * std.time.ns_per_us);
+        compat.sleepNs(50 * std.time.ns_per_us);
     }
 }
 
@@ -579,8 +584,8 @@ pub fn streamMake(conn: *QuicConnection, poll_peer: ?*QuicEndpoint) !*QuicStream
     qs.* = .{
         .conn = conn,
         .stream_id = sid,
-        .read_buf = .{},
-        .write_buf = .{},
+        .read_buf = .empty,
+        .write_buf = .empty,
         .write_off = 0,
         .is_incoming = false,
     };
@@ -610,8 +615,8 @@ pub fn streamMakeUni(conn: *QuicConnection, poll_peer: ?*QuicEndpoint) !*QuicStr
     qs.* = .{
         .conn = conn,
         .stream_id = sid,
-        .read_buf = .{},
-        .write_buf = .{},
+        .read_buf = .empty,
+        .write_buf = .empty,
         .write_off = 0,
         .stream_send_off = 0,
         .is_incoming = false,
@@ -644,15 +649,17 @@ pub fn streamDrainWrites(st: *QuicStream, peer: *QuicEndpoint, max_rounds: u32) 
         const rest = st.write_buf.items[st.write_off..];
         const take = @min(rest.len, max_stream_chunk);
         const fin = take == rest.len;
-        if (st.conn.client) |c| {
-            c.sendRawStreamData(st.stream_id, st.stream_send_off, rest[0..take], fin);
-        } else {
+        // zquic 1.7.x `sendRawStreamData` returns the number of bytes accepted
+        // into the send buffer; advance by that rather than the requested size.
+        const sent = if (st.conn.client) |c|
+            c.sendRawStreamData(st.stream_id, st.stream_send_off, rest[0..take], fin)
+        else blk: {
             const srv = st.conn.server orelse return error.StreamWriteTimeout;
             const cs = st.conn.connStatePtr() orelse return error.StreamWriteTimeout;
-            srv.sendRawStreamData(cs, st.stream_id, st.stream_send_off, rest[0..take], fin);
-        }
-        st.stream_send_off += take;
-        st.write_off += take;
+            break :blk srv.sendRawStreamData(cs, st.stream_id, st.stream_send_off, rest[0..take], fin);
+        };
+        st.stream_send_off += sent;
+        st.write_off += sent;
         try poll(st.conn.ep, 0);
         try poll(peer, 0);
     }

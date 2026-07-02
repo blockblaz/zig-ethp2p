@@ -6,6 +6,7 @@
 //! pin `&self.pool.pool` to the address used during `init`.
 
 const std = @import("std");
+const compat = @import("compat");
 const broadcast_types = @import("../layer/broadcast_types.zig");
 const dedup_registry_mod = @import("../layer/dedup_registry.zig");
 const rs_strategy = @import("../layer/rs_strategy.zig");
@@ -23,7 +24,7 @@ pub const RelayAsyncVerifier = struct {
     out_q: verify_queue_mod.VerifyQueue,
     pool: verify_workers_mod.VerifyWorkerPool,
     pending: std.AutoHashMapUnmanaged(u64, Pending) = .{},
-    mu: std.Thread.Mutex = .{},
+    mu: compat.Mutex = .{},
     next_handle: std.atomic.Value(u64) = .init(1),
 
     pub const Pending = struct {
@@ -187,7 +188,7 @@ pub const RelayAsyncVerifier = struct {
         });
         self.mu.unlock();
 
-        var wg: std.Thread.WaitGroup = .{};
+        var wg: compat.WaitGroup = .{};
         self.pool.scheduleWait(&wg, .{
             .handle = handle,
             .expected_hash = expected,
