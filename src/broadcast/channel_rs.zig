@@ -20,6 +20,67 @@ const Allocator = std.mem.Allocator;
 const RsConfig = rs_init.RsConfig;
 const RsStrategy = rs_strategy.RsStrategy;
 
+pub const FullMessage = broadcast_types.FullMessage;
+
+/// Bounded FIFO of decoded messages for a channel subscriber. Owns a copy of
+/// each delivered message and drops (counting) on overflow — the Zig analog of
+/// Go's non-blocking send to a buffered `chan FullMessage`. Caller-created and
+/// caller-owned (like the Go channel); `ChannelRs` only holds a pointer.
+pub const Subscription = struct {
+    allocator: Allocator,
+    ring: []FullMessage,
+    head: usize = 0,
+    len: usize = 0,
+    dropped_count: usize = 0,
+
+    /// `capacity` must be > 0 (an unbuffered subscription is rejected by
+    /// `ChannelRs.subscribe` with `error.UnbufferedSubscription`).
+    pub fn init(allocator: Allocator, cap: usize) Allocator.Error!Subscription {
+        return .{ .allocator = allocator, .ring = try allocator.alloc(FullMessage, cap) };
+    }
+
+    pub fn deinit(self: *Subscription) void {
+        while (self.pop()) |m| freeMessage(self.allocator, m);
+        self.allocator.free(self.ring);
+        self.* = undefined;
+    }
+
+    pub fn capacity(self: *const Subscription) usize {
+        return self.ring.len;
+    }
+    pub fn count(self: *const Subscription) usize {
+        return self.len;
+    }
+    pub fn dropped(self: *const Subscription) usize {
+        return self.dropped_count;
+    }
+
+    /// Pop the oldest message; ownership transfers to the caller, who frees it
+    /// with `Subscription.freeMessage`.
+    pub fn pop(self: *Subscription) ?FullMessage {
+        if (self.len == 0) return null;
+        const m = self.ring[self.head];
+        self.head = (self.head + 1) % self.ring.len;
+        self.len -= 1;
+        return m;
+    }
+
+    /// Enqueue an already-owned message; false (ownership retained by caller)
+    /// when full.
+    fn pushOwned(self: *Subscription, m: FullMessage) bool {
+        if (self.len == self.ring.len) return false;
+        self.ring[(self.head + self.len) % self.ring.len] = m;
+        self.len += 1;
+        return true;
+    }
+
+    pub fn freeMessage(allocator: Allocator, m: FullMessage) void {
+        allocator.free(m.channel_id);
+        allocator.free(m.message_id);
+        allocator.free(m.data);
+    }
+};
+
 pub const ChannelRs = struct {
     allocator: Allocator,
     engine: *Engine,
@@ -27,6 +88,7 @@ pub const ChannelRs = struct {
     cfg: RsConfig,
     members: std.ArrayListUnmanaged([]u8),
     sessions: std.StringHashMapUnmanaged(*SessionRs),
+    subscriber: ?*Subscription = null,
 
     pub fn init(allocator: Allocator, engine: *Engine, id: []u8, cfg: RsConfig) !ChannelRs {
         return .{
@@ -36,7 +98,35 @@ pub const ChannelRs = struct {
             .cfg = cfg,
             .members = .empty,
             .sessions = .{},
+            .subscriber = null,
         };
+    }
+
+    /// Register a subscriber to receive decoded messages. Mirrors
+    /// `Channel.Subscribe`: rejects a second subscriber (`AlreadySubscribed`)
+    /// or an unbuffered one (`UnbufferedSubscription`).
+    pub fn subscribe(self: *ChannelRs, sub: *Subscription) errors.Error!void {
+        if (self.subscriber != null) return error.AlreadySubscribed;
+        if (sub.capacity() == 0) return error.UnbufferedSubscription;
+        self.subscriber = sub;
+    }
+
+    /// Deliver a decoded message to the subscriber (if any), copying the bytes
+    /// and dropping on overflow. Mirrors Go `deliverMessage` (the paired
+    /// `OnSessionDecoded` emit lives in `sessionDecode`).
+    fn deliverMessage(self: *ChannelRs, message_id: []const u8, data: []const u8) Allocator.Error!void {
+        const sub = self.subscriber orelse return;
+        const cid = try self.allocator.dupe(u8, self.id);
+        errdefer self.allocator.free(cid);
+        const mid = try self.allocator.dupe(u8, message_id);
+        errdefer self.allocator.free(mid);
+        const payload = try self.allocator.dupe(u8, data);
+        errdefer self.allocator.free(payload);
+        const msg = FullMessage{ .channel_id = cid, .message_id = mid, .data = payload };
+        if (!sub.pushOwned(msg)) {
+            Subscription.freeMessage(self.allocator, msg);
+            sub.dropped_count += 1;
+        }
     }
 
     pub fn deinit(self: *ChannelRs) void {
@@ -180,9 +270,11 @@ pub const ChannelRs = struct {
     pub fn sessionDecode(self: *ChannelRs, message_id: []const u8) ![]u8 {
         const slot = self.sessions.getPtr(message_id) orelse return error.InvalidMessage;
         const out = try slot.*.strategy.decode();
+        errdefer self.allocator.free(out);
         // Latency is not tracked in the Zig port yet (no per-session start clock);
         // emit 0 for now — Go passes `time.Since(session.start)`.
         self.engine.config.observer.sessionDecoded(self.id, message_id, 0);
+        try self.deliverMessage(message_id, out);
         return out;
     }
 
@@ -323,6 +415,82 @@ test "observer receives channel/peer/session events" {
     try std.testing.expectEqual(@as(usize, 1), rec.session_started);
     try std.testing.expectEqual(@import("../layer/broadcast_types.zig").SessionRole.origin, rec.last_role.?);
     try std.testing.expectEqual(@as(usize, 1), rec.session_decoded);
+}
+
+const sub_test_cfg = RsConfig{
+    .data_shards = 4,
+    .parity_shards = 2,
+    .chunk_len = 0,
+    .bitmap_threshold = 0,
+    .forward_multiplier = 4,
+    .disable_bitmap = false,
+};
+
+test "subscribe rejects unbuffered and double subscription" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.init(gpa, "local", .{});
+    defer eng.deinit();
+    const ch = try eng.attachChannelRs("topic", sub_test_cfg);
+
+    var unbuffered = try Subscription.init(gpa, 0);
+    defer unbuffered.deinit();
+    try std.testing.expectError(error.UnbufferedSubscription, ch.subscribe(&unbuffered));
+
+    var sub = try Subscription.init(gpa, 4);
+    defer sub.deinit();
+    try ch.subscribe(&sub);
+
+    var sub2 = try Subscription.init(gpa, 4);
+    defer sub2.deinit();
+    try std.testing.expectError(error.AlreadySubscribed, ch.subscribe(&sub2));
+}
+
+test "decode delivers a FullMessage to the subscriber" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.init(gpa, "local", .{});
+    defer eng.deinit();
+    const ch = try eng.attachChannelRs("topic", sub_test_cfg);
+    try ch.addMember("p1");
+
+    var sub = try Subscription.init(gpa, 4);
+    defer sub.deinit();
+    try ch.subscribe(&sub);
+
+    const payload = [_]u8{ 'h', 'e', 'l', 'l', 'o' };
+    try ch.publish("m1", &payload);
+    const decoded = try ch.sessionDecode("m1");
+    defer gpa.free(decoded);
+
+    try std.testing.expectEqual(@as(usize, 1), sub.count());
+    const m = sub.pop().?;
+    defer Subscription.freeMessage(gpa, m);
+    try std.testing.expectEqualStrings("topic", m.channel_id);
+    try std.testing.expectEqualStrings("m1", m.message_id);
+    try std.testing.expectEqualSlices(u8, &payload, m.data);
+    try std.testing.expect(sub.pop() == null);
+}
+
+test "subscriber drops decoded messages when full" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.init(gpa, "local", .{});
+    defer eng.deinit();
+    const ch = try eng.attachChannelRs("topic", sub_test_cfg);
+    try ch.addMember("p1");
+
+    var sub = try Subscription.init(gpa, 1);
+    defer sub.deinit();
+    try ch.subscribe(&sub);
+
+    const payload = [_]u8{ 'w', 'o', 'r', 'l', 'd' };
+    try ch.publish("m1", &payload);
+    const d1 = try ch.sessionDecode("m1");
+    defer gpa.free(d1);
+    try ch.publish("m2", &payload);
+    const d2 = try ch.sessionDecode("m2");
+    defer gpa.free(d2);
+
+    try std.testing.expectEqual(@as(usize, 1), sub.count());
+    try std.testing.expectEqual(@as(usize, 1), sub.dropped());
 }
 
 test "relay ingest registry blocks second claim same chunk index" {

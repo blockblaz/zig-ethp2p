@@ -13,6 +13,14 @@ pub const SessionRole = enum(u8) {
     relay = 1,
 };
 
+/// A fully decoded broadcast message delivered to a channel subscriber.
+/// Mirrors ethp2p `FullMessage` (`channel_id` / `message_id` / `data`).
+pub const FullMessage = struct {
+    channel_id: []const u8,
+    message_id: []const u8,
+    data: []const u8,
+};
+
 pub const Verdict = enum(u8) {
     accepted = 0,
     redundant = 1,
