@@ -11,7 +11,7 @@ const Allocator = std.mem.Allocator;
 pub const Error = errors.Error;
 
 pub const EngineConfig = struct {
-    observer: observer_mod.Observer = .{},
+    observer: observer_mod.Observer = observer_mod.noop,
     /// When set, `Engine` owns a `DedupRegistry` for `relayIngestChunk`-style helpers.
     enable_cross_session_dedup: bool = false,
 };
@@ -75,6 +75,7 @@ pub const Engine = struct {
         errdefer self.allocator.destroy(ch);
         ch.* = try ChannelRs.init(self.allocator, self, key, cfg);
         try self.channels.put(self.allocator, key, ch);
+        self.config.observer.channelAttached(key, null);
         return ch;
     }
 

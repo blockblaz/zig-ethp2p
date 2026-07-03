@@ -14,7 +14,8 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | CHUNK uni-stream | [`broadcast/peer_ctrl.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/peer_ctrl.go) `doSendChunk`, [`peer_in.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/peer_in.go) `processChunk` | `wire.chunk_stream` |
 | RS `Preamble` / `ChunkIdent` | [`broadcast/rs/pb`](https://github.com/ethp2p/ethp2p/tree/main/broadcast/rs/pb), [`broadcast/rs/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/rs/types.go) | `wire.rs`, `writeRsShardChunk` |
 | Protocol version constant | [`broadcast/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/types.go) `ProtocolV1` | `wire.constants.protocol_v1` |
-| `Verdict` / `ChunkHandle` | [`broadcast/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/types.go) | `layer.broadcast_types` |
+| `Verdict` / `ChunkHandle` / `SessionRole` | [`broadcast/types.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/types.go), [`broadcast/observer.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/observer.go) | `layer.broadcast_types` |
+| Broadcast event `Observer` interface + `NoOpObserver` (15 callbacks, type-erased vtable) — emitted for channel-attach, session start/decode, chunk receive, peer subscribe/unsubscribe (remaining callbacks land with their subsystems) | [`broadcast/observer.go`](https://github.com/ethp2p/ethp2p/blob/main/broadcast/observer.go) | `broadcast.observer` |
 | `DedupCancel` + `DedupGroup` token (session hook) | session → strategy `takeChunk` | `layer.broadcast_types`, `layer.dedup` |
 | Engine-wide dedup registry (`channel` + `message` + chunk index) | multi-peer ingest dedup | `layer.dedup_registry`, `Engine.enable_cross_session_dedup` |
 | Verify result FIFO (single-threaded `Verified()` shim) | async verify channels | `layer.verify_queue` |
@@ -39,6 +40,7 @@ Zig helpers for the wire formats of **[ethp2p](https://github.com/ethp2p/ethp2p)
 | `PartialMessagesExtension` (nested in `RPC.partial`) | libp2p `rpc.proto` field 10 body | `encodePartialMessagesExtension`, `decodePartialMessagesExtensionOwned` |
 | Unsigned-varint length prefix before `RPC` body | common libp2p framing | `encodeRpcLengthPrefixed`, `decodeRpcLengthPrefixedPrefix` |
 | In-process duplex for length-prefixed `RPC` (simnet-style, no TCP/QUIC) | pair of `Endpoint`s over bounded byte queues | `sim.gossipsub_rpc_host` (`Link`, `Endpoint.sendRpc` / `recvRpcOwned`) |
+| Broadcast trace writer (`.bctrace` NDJSON: header / event tuples / 100 ms footer time index; golden bytes from the Go writer) | [`sim/trace_writer.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/trace_writer.go) | `sim.trace_writer` |
 | QUIC transport + UNI stream alignment | [`sim/host.go`](https://github.com/ethp2p/ethp2p/blob/main/sim/host.go), `peer.go`, `peer_ctrl.go`, `peer_in.go` | `transport.eth_ec_quic`: IETF QUIC, TLS 1.3, ALPN `eth-ec-broadcast`, **unidirectional** BCAST/SESS/CHUNK streams matching `OpenUniStream`/`AcceptUniStream`; `PeerConn` + `broadcast.engine_quic` (`EngineQuicHost`) wire inbound SESS/CHUNK into `Engine` / `ChannelRs`. See [QUIC transport](#quic-transport-zquic). |
 | **Still open** | — | [Pending work](#pending-work) |
 
@@ -96,7 +98,7 @@ All ethp2p application protocols use UNI streams — both peers independently op
 
 ## Requirements
 
-- Zig **0.15.1** or newer.
+- Zig **0.16.0** or newer. (The `std.Io` reorg — `std.net`, the `std.io` reader/writer, `std.crypto.random`, and `std.Thread.Mutex`/`Pool` — is bridged by the dependency-free `src/compat.zig` shim.)
 
 ## Build
 

@@ -6,6 +6,13 @@ pub const ChunkHandle = u64;
 
 pub const protocol_v1: u32 = 1;
 
+/// Distinguishes origin sessions (the publisher) from relay sessions (nodes
+/// forwarding chunks they received from others). Mirrors ethp2p `SessionRole`.
+pub const SessionRole = enum(u8) {
+    origin = 0,
+    relay = 1,
+};
+
 pub const Verdict = enum(u8) {
     accepted = 0,
     redundant = 1,

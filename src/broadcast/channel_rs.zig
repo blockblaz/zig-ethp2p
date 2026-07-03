@@ -60,6 +60,7 @@ pub const ChannelRs = struct {
         const dup = try self.allocator.dupe(u8, peer_id);
         errdefer self.allocator.free(dup);
         try self.members.append(self.allocator, dup);
+        self.engine.config.observer.peerSubscribed(peer_id, self.id);
     }
 
     pub fn removeMember(self: *ChannelRs, peer_id: []const u8) void {
@@ -67,6 +68,7 @@ pub const ChannelRs = struct {
             if (std.mem.eql(u8, m, peer_id)) {
                 self.allocator.free(m);
                 _ = self.members.swapRemove(i);
+                self.engine.config.observer.peerUnsubscribed(peer_id, self.id);
                 return;
             }
         }
@@ -113,6 +115,7 @@ pub const ChannelRs = struct {
         strat = null;
 
         try self.sessions.put(self.allocator, mid, sess);
+        self.engine.config.observer.sessionStarted(self.id, mid, .origin);
     }
 
     /// Relay-side session for an existing preamble (same members as `publish`).
@@ -155,6 +158,7 @@ pub const ChannelRs = struct {
         };
 
         try self.sessions.put(self.allocator, mid, sess);
+        self.engine.config.observer.sessionStarted(self.id, mid, .relay);
     }
 
     pub fn sessionDrainOutbound(self: *ChannelRs, message_id: []const u8) !usize {
@@ -175,7 +179,11 @@ pub const ChannelRs = struct {
 
     pub fn sessionDecode(self: *ChannelRs, message_id: []const u8) ![]u8 {
         const slot = self.sessions.getPtr(message_id) orelse return error.InvalidMessage;
-        return slot.*.strategy.decode();
+        const out = try slot.*.strategy.decode();
+        // Latency is not tracked in the Zig port yet (no per-session start clock);
+        // emit 0 for now — Go passes `time.Since(session.start)`.
+        self.engine.config.observer.sessionDecoded(self.id, message_id, 0);
+        return out;
     }
 
     /// After a successful decode, clears engine `DedupRegistry` keys for this `(channel_id, message_id)`
@@ -204,13 +212,15 @@ pub const ChannelRs = struct {
         dedup: ?*broadcast_types.DedupCancel,
     ) (Allocator.Error || errors.Error)!broadcast_types.ChunkIngestResult {
         const strat = self.sessionStrategy(message_id) orelse return error.InvalidMessage;
-        if (registry) |reg| {
-            const first = try reg.claim(self.allocator, self.id, message_id, chunk_id.index);
-            if (!first) {
-                return .{ .verdict = .redundant, .complete = false };
+        const result: broadcast_types.ChunkIngestResult = blk: {
+            if (registry) |reg| {
+                const first = try reg.claim(self.allocator, self.id, message_id, chunk_id.index);
+                if (!first) break :blk .{ .verdict = .redundant, .complete = false };
             }
-        }
-        return strat.takeChunk(peer, chunk_id, data, dedup);
+            break :blk try strat.takeChunk(peer, chunk_id, data, dedup);
+        };
+        self.engine.config.observer.chunkRcvd(peer, self.id, message_id, result.verdict);
+        return result;
     }
 
     /// `relayIngestChunk` using the engine-owned registry when cross-session dedup is enabled; otherwise `null`.
@@ -238,6 +248,7 @@ pub const ChannelRs = struct {
         const strat = self.sessionStrategy(message_id) orelse return error.InvalidMessage;
         const v = strat.verifyChunk(chunk_id, data);
         if (v != .accepted) {
+            self.engine.config.observer.chunkRcvd(peer, self.id, message_id, v);
             return .{ .verdict = v, .complete = false };
         }
         return self.relayIngestChunk(registry, message_id, peer, chunk_id, data, dedup);
@@ -282,6 +293,36 @@ test "channel publish and drain to one member" {
     const decoded = try ch.sessionDecode("m1");
     defer gpa.free(decoded);
     try std.testing.expectEqualSlices(u8, &payload, decoded);
+}
+
+test "observer receives channel/peer/session events" {
+    const gpa = std.testing.allocator;
+    var rec: @import("observer.zig").Recording = .{};
+
+    var eng = try Engine.init(gpa, "local", .{ .observer = rec.observer() });
+    defer eng.deinit();
+
+    const cfg = RsConfig{
+        .data_shards = 4,
+        .parity_shards = 2,
+        .chunk_len = 0,
+        .bitmap_threshold = 0,
+        .forward_multiplier = 4,
+        .disable_bitmap = false,
+    };
+
+    const ch = try eng.attachChannelRs("topic", cfg);
+    try ch.addMember("p1");
+    const payload = [_]u8{ 'h', 'e', 'l', 'l', 'o' };
+    try ch.publish("m1", &payload);
+    const decoded = try ch.sessionDecode("m1");
+    defer gpa.free(decoded);
+
+    try std.testing.expectEqual(@as(usize, 1), rec.channel_attached);
+    try std.testing.expectEqual(@as(usize, 1), rec.peer_subscribed);
+    try std.testing.expectEqual(@as(usize, 1), rec.session_started);
+    try std.testing.expectEqual(@import("../layer/broadcast_types.zig").SessionRole.origin, rec.last_role.?);
+    try std.testing.expectEqual(@as(usize, 1), rec.session_decoded);
 }
 
 test "relay ingest registry blocks second claim same chunk index" {
