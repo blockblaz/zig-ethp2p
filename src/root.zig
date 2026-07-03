@@ -20,6 +20,7 @@ pub const sim = struct {
     pub const gossipsub_interop = @import("sim/gossipsub_interop.zig");
     pub const gossipsub_rpc_pb = @import("sim/gossipsub_rpc_pb.zig");
     pub const gossipsub_rpc_host = @import("sim/gossipsub_rpc_host.zig");
+    pub const trace_writer = @import("sim/trace_writer.zig");
 };
 
 /// Higher-level broadcast / RS helpers aligned with ethp2p `broadcast/` (not wire-only).
@@ -75,6 +76,7 @@ test {
     _ = sim.gossipsub_interop;
     _ = sim.gossipsub_rpc_pb;
     _ = sim.gossipsub_rpc_host;
+    _ = sim.trace_writer;
     _ = broadcast.errors;
     _ = broadcast.engine;
     _ = broadcast.channel_rs;
