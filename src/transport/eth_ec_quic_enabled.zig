@@ -85,7 +85,19 @@ fn toQuicConfig(
         .allow_insecure = config.tls_insecure_skip_verify,
         .max_idle_timeout_ms = maxIdleTimeoutMs(config.max_idle_timeout_ns),
         .max_udp_payload = 1350,
+        .max_incoming_streams = config.max_incoming_streams,
+        .max_incoming_uni_streams = config.max_incoming_uni_streams,
     };
+}
+
+test "toQuicConfig plumbs the incoming-stream limits (no longer dropped)" {
+    const alpn = [1][]const u8{"eth-ec-broadcast"};
+    var config = common.EthEcQuicConfig.default();
+    config.max_incoming_streams = 4096;
+    config.max_incoming_uni_streams = 2048;
+    const qc = toQuicConfig(config, &alpn);
+    try std.testing.expectEqual(@as(u32, 4096), qc.max_incoming_streams);
+    try std.testing.expectEqual(@as(u32, 2048), qc.max_incoming_uni_streams);
 }
 
 pub fn listenImpl(

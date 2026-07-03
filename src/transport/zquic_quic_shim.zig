@@ -18,6 +18,12 @@ pub const QuicConfig = struct {
     allow_insecure: bool = false,
     max_idle_timeout_ms: u32 = 30_000,
     max_udp_payload: u32 = 1350,
+    /// Per-connection incoming-stream limits (Go `MaxIncomingStreams` /
+    /// `MaxIncomingUniStreams`). Carried here so the value is no longer dropped
+    /// in `toQuicConfig`; see the note at the `io.ServerConfig` build site for
+    /// the remaining zquic-side wiring.
+    max_incoming_streams: u32 = 16_384,
+    max_incoming_uni_streams: u32 = 16_384,
 };
 
 pub fn logInit(_: []const u8) void {
@@ -344,6 +350,11 @@ pub fn endpointInit(allocator: *std.mem.Allocator, bind_s: []const u8, qc: *Quic
         var la_len: posix.socklen_t = @sizeOf(compat.Address);
         try compat.getsockname(sock, &local_addr.any, &la_len);
 
+        // NOTE: `qc.max_incoming_streams` / `qc.max_incoming_uni_streams` reach
+        // here but cannot yet be applied — zquic's `io.ServerConfig` exposes no
+        // numeric incoming-stream limit (only `transport_params_preset`, whose
+        // `default` advertises `initial_max_streams_{bidi,uni} = 1000`). Honoring
+        // a custom limit needs a zquic `ServerConfig` field; tracked upstream.
         const scfg = io.ServerConfig{
             .port = addr.getPort(),
             .cert_path = cert_abs,
