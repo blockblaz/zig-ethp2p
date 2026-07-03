@@ -183,6 +183,12 @@ pub const ChannelRs = struct {
         }
         const stats = try self.allocator.alloc(broadcast_types.PeerSessionStats, n);
         errdefer self.allocator.free(stats);
+        const completed = try self.allocator.alloc(bool, n);
+        errdefer self.allocator.free(completed);
+        @memset(completed, false);
+        const dropped = try self.allocator.alloc(bool, n);
+        errdefer self.allocator.free(dropped);
+        @memset(dropped, false);
 
         while (populated < n) : (populated += 1) {
             member_ids[populated] = try self.allocator.dupe(u8, self.members.items[populated]);
@@ -201,6 +207,10 @@ pub const ChannelRs = struct {
             .strategy = strat.?,
             .member_ids = member_ids,
             .stats = stats,
+            .stage = .origin,
+            .completed = completed,
+            .dropped = dropped,
+            .ever_had_peers = n > 0,
         };
         strat = null;
 
@@ -227,6 +237,12 @@ pub const ChannelRs = struct {
         }
         const stats = try self.allocator.alloc(broadcast_types.PeerSessionStats, n);
         errdefer self.allocator.free(stats);
+        const completed = try self.allocator.alloc(bool, n);
+        errdefer self.allocator.free(completed);
+        @memset(completed, false);
+        const dropped = try self.allocator.alloc(bool, n);
+        errdefer self.allocator.free(dropped);
+        @memset(dropped, false);
 
         while (populated < n) : (populated += 1) {
             member_ids[populated] = try self.allocator.dupe(u8, self.members.items[populated]);
@@ -245,6 +261,10 @@ pub const ChannelRs = struct {
             .strategy = strat,
             .member_ids = member_ids,
             .stats = stats,
+            .stage = .consuming,
+            .completed = completed,
+            .dropped = dropped,
+            .ever_had_peers = n > 0,
         };
 
         try self.sessions.put(self.allocator, mid, sess);
@@ -271,11 +291,25 @@ pub const ChannelRs = struct {
         const slot = self.sessions.getPtr(message_id) orelse return error.InvalidMessage;
         const out = try slot.*.strategy.decode();
         errdefer self.allocator.free(out);
+        // Relay session reconstructed (no-op for origin); mirrors Go
+        // `signalReconstructed` after a successful decode.
+        slot.*.signalReconstructed();
         // Latency is not tracked in the Zig port yet (no per-session start clock);
         // emit 0 for now — Go passes `time.Since(session.start)`.
         self.engine.config.observer.sessionDecoded(self.id, message_id, 0);
         try self.deliverMessage(message_id, out);
         return out;
+    }
+
+    /// Remove `message_id`'s session and free it, emitting `OnSessionDisposed`.
+    /// Mirrors ethp2p `Channel.disposeSession`; no-op if there is no session.
+    pub fn disposeSession(self: *ChannelRs, message_id: []const u8, reason: []const u8) void {
+        if (self.sessions.fetchRemove(message_id)) |kv| {
+            self.engine.config.observer.sessionDisposed(self.id, kv.key, reason);
+            kv.value.deinit();
+            self.allocator.destroy(kv.value);
+            self.allocator.free(kv.key);
+        }
     }
 
     /// After a successful decode, clears engine `DedupRegistry` keys for this `(channel_id, message_id)`
@@ -491,6 +525,63 @@ test "subscriber drops decoded messages when full" {
 
     try std.testing.expectEqual(@as(usize, 1), sub.count());
     try std.testing.expectEqual(@as(usize, 1), sub.dropped());
+}
+
+const session_rs_mod = @import("session_rs.zig");
+
+test "origin session disposes once its peer completes; disposeSession emits" {
+    const gpa = std.testing.allocator;
+    var rec: @import("observer.zig").Recording = .{};
+    var eng = try Engine.init(gpa, "local", .{ .observer = rec.observer() });
+    defer eng.deinit();
+    const ch = try eng.attachChannelRs("topic", sub_test_cfg);
+    try ch.addMember("p1");
+
+    const payload = [_]u8{ 'h', 'i', '!', '!', '!' };
+    try ch.publish("m1", &payload);
+
+    const sess = ch.sessions.get("m1").?;
+    try std.testing.expectEqual(session_rs_mod.SessionStage.origin, sess.stage);
+    // Decoded (origin) but the peer has not completed → not disposable yet.
+    try std.testing.expect(!sess.maybeDispose());
+    sess.markPeerCompleted("p1");
+    try std.testing.expect(sess.maybeDispose());
+
+    ch.disposeSession("m1", "reconstructed");
+    try std.testing.expect(ch.sessions.get("m1") == null);
+    try std.testing.expectEqual(@as(usize, 1), rec.session_disposed);
+}
+
+test "relay session: consuming stage, reconstruct signal, drop-based disposal" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.init(gpa, "local", .{});
+    defer eng.deinit();
+    const ch = try eng.attachChannelRs("topic", sub_test_cfg);
+    try ch.addMember("peerA");
+    try ch.addMember("peerB");
+
+    const payload = [_]u8{ 9, 8, 7 };
+    var origin = try RsStrategy.newOrigin(gpa, sub_test_cfg, &payload);
+    defer origin.deinit();
+    try ch.attachRelaySession("m1", &origin.preamble);
+
+    const sess = ch.sessions.get("m1").?;
+    try std.testing.expectEqual(session_rs_mod.SessionStage.consuming, sess.stage);
+
+    // Not decoded: disposes only when every peer is dropped.
+    try std.testing.expect(!sess.maybeDispose());
+    sess.dropPeer("peerA");
+    try std.testing.expect(!sess.maybeDispose());
+    sess.dropPeer("peerB");
+    try std.testing.expect(sess.maybeDispose());
+
+    // Reconstruction moves it to the decoded branch.
+    sess.signalReconstructed();
+    try std.testing.expectEqual(session_rs_mod.SessionStage.reconstructed, sess.stage);
+    try std.testing.expect(sess.maybeDispose());
+
+    ch.disposeSession("m1", "ttl_expired");
+    try std.testing.expect(ch.sessions.get("m1") == null);
 }
 
 test "relay ingest registry blocks second claim same chunk index" {
