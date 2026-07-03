@@ -51,6 +51,9 @@ pub const SessionRs = struct {
     /// Whether any peer was ever attached (Go `everHadPeers`); disposal is
     /// gated on this so peerless sessions are left for TTL cleanup.
     ever_had_peers: bool = false,
+    /// Creation time in ms (Go `createdAt`), set by the driver that owns the
+    /// clock; `0` means "unset" and is skipped by TTL cleanup.
+    created_at_ms: i64 = 0,
 
     pub fn deinit(self: *SessionRs) void {
         self.strategy.deinit();

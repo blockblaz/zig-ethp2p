@@ -81,6 +81,28 @@ pub const Subscription = struct {
     }
 };
 
+// Channel capacity / lifetime constants (ethp2p `broadcast/channel.go`).
+pub const channel_inbox_cap: usize = 1024;
+pub const max_parked_chunks: usize = 32;
+pub const active_session_ttl_ms: i64 = 5 * 60 * 1000;
+pub const pending_chunk_ttl_ms: i64 = 10 * 1000;
+pub const cleanup_interval_ms: i64 = 30 * 1000;
+pub const routing_tick_interval_ms: i64 = 25;
+
+/// A chunk buffered because it arrived before its session existed. Owns copies
+/// of `peer` and `data`. (Go parks the QUIC stream itself and lets flow control
+/// back-pressure the sender; the Zig ingest path already holds the read bytes.)
+pub const ParkedChunk = struct {
+    peer: []u8,
+    chunk_index: i32,
+    data: []u8,
+    parked_at_ms: i64,
+};
+
+const ParkedList = std.ArrayListUnmanaged(ParkedChunk);
+
+pub const ParkResult = enum { parked, dropped_full };
+
 pub const ChannelRs = struct {
     allocator: Allocator,
     engine: *Engine,
@@ -89,6 +111,8 @@ pub const ChannelRs = struct {
     members: std.ArrayListUnmanaged([]u8),
     sessions: std.StringHashMapUnmanaged(*SessionRs),
     subscriber: ?*Subscription = null,
+    /// Chunks buffered per message id until the session opens (Go `parked`).
+    parked: std.StringHashMapUnmanaged(ParkedList) = .empty,
 
     pub fn init(allocator: Allocator, engine: *Engine, id: []u8, cfg: RsConfig) !ChannelRs {
         return .{
@@ -99,6 +123,7 @@ pub const ChannelRs = struct {
             .members = .empty,
             .sessions = .{},
             .subscriber = null,
+            .parked = .empty,
         };
     }
 
@@ -138,9 +163,107 @@ pub const ChannelRs = struct {
             self.allocator.free(kv.key_ptr.*);
         }
         self.sessions.deinit(self.allocator);
+        var pit = self.parked.iterator();
+        while (pit.next()) |kv| {
+            freeParkedList(self.allocator, kv.value_ptr);
+            self.allocator.free(kv.key_ptr.*);
+        }
+        self.parked.deinit(self.allocator);
         for (self.members.items) |m| self.allocator.free(m);
         self.members.deinit(self.allocator);
         self.allocator.free(self.id);
+    }
+
+    /// Buffer a chunk that arrived before its session exists (Go `handleChunk`
+    /// park path). Per-message cap `max_parked_chunks`; when full, the new chunk
+    /// is dropped (`.dropped_full`) — matching Go, which cancels the stream.
+    pub fn parkChunk(
+        self: *ChannelRs,
+        message_id: []const u8,
+        peer: []const u8,
+        chunk_index: i32,
+        data: []const u8,
+        now_ms: i64,
+    ) Allocator.Error!ParkResult {
+        const gop = try self.parked.getOrPut(self.allocator, message_id);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = self.allocator.dupe(u8, message_id) catch |err| {
+                _ = self.parked.remove(message_id);
+                return err;
+            };
+            gop.value_ptr.* = .empty;
+        }
+        if (gop.value_ptr.items.len >= max_parked_chunks) return .dropped_full;
+        const peer_o = try self.allocator.dupe(u8, peer);
+        errdefer self.allocator.free(peer_o);
+        const data_o = try self.allocator.dupe(u8, data);
+        errdefer self.allocator.free(data_o);
+        try gop.value_ptr.append(self.allocator, .{
+            .peer = peer_o,
+            .chunk_index = chunk_index,
+            .data = data_o,
+            .parked_at_ms = now_ms,
+        });
+        return .parked;
+    }
+
+    /// Number of chunks currently parked for `message_id`.
+    pub fn parkedCount(self: *const ChannelRs, message_id: []const u8) usize {
+        const list = self.parked.getPtr(message_id) orelse return 0;
+        return list.items.len;
+    }
+
+    /// Replay and free any chunks parked for `message_id` into its now-open
+    /// session (Go `handleSessionOpen` flush). Best-effort: ingest errors are
+    /// ignored so a bad parked chunk cannot block the rest.
+    fn drainParked(self: *ChannelRs, message_id: []const u8) void {
+        if (self.parked.fetchRemove(message_id)) |kv| {
+            var list = kv.value;
+            for (list.items) |pc| {
+                _ = self.relayIngestChunk(self.engine.dedupRegistryPtr(), message_id, pc.peer, .{ .index = pc.chunk_index }, pc.data, null) catch {};
+                self.allocator.free(pc.peer);
+                self.allocator.free(pc.data);
+            }
+            list.deinit(self.allocator);
+            self.allocator.free(kv.key);
+        }
+    }
+
+    fn dropParked(self: *ChannelRs, message_id: []const u8) void {
+        if (self.parked.fetchRemove(message_id)) |kv| {
+            var list = kv.value;
+            freeParkedList(self.allocator, &list);
+            self.allocator.free(kv.key);
+        }
+    }
+
+    /// Poll-driven GC (Go `cleanup`, run every `cleanup_interval_ms`): dispose
+    /// sessions older than `active_session_ttl_ms` and drop parked-chunk buckets
+    /// older than `pending_chunk_ttl_ms`. Sessions with `created_at_ms == 0`
+    /// (clock unset) are skipped.
+    pub fn cleanup(self: *ChannelRs, now_ms: i64) void {
+        // Collect expired session ids first (cannot mutate while iterating).
+        var expired_sessions: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer expired_sessions.deinit(self.allocator);
+        var sit = self.sessions.iterator();
+        while (sit.next()) |kv| {
+            const created = kv.value_ptr.*.created_at_ms;
+            if (created != 0 and now_ms - created > active_session_ttl_ms) {
+                expired_sessions.append(self.allocator, kv.key_ptr.*) catch continue;
+            }
+        }
+        for (expired_sessions.items) |mid| self.disposeSession(mid, "ttl_expired");
+
+        var expired_parked: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer expired_parked.deinit(self.allocator);
+        var pit = self.parked.iterator();
+        while (pit.next()) |kv| {
+            const list = kv.value_ptr;
+            if (list.items.len > 0 and now_ms - list.items[0].parked_at_ms > pending_chunk_ttl_ms) {
+                expired_parked.append(self.allocator, kv.key_ptr.*) catch continue;
+            }
+        }
+        for (expired_parked.items) |mid| self.dropParked(mid);
     }
 
     pub fn addMember(self: *ChannelRs, peer_id: []const u8) !void {
@@ -268,6 +391,8 @@ pub const ChannelRs = struct {
         };
 
         try self.sessions.put(self.allocator, mid, sess);
+        // Flush chunk streams that arrived before this session existed.
+        self.drainParked(mid);
         self.engine.config.observer.sessionStarted(self.id, mid, .relay);
     }
 
@@ -304,6 +429,9 @@ pub const ChannelRs = struct {
     /// Remove `message_id`'s session and free it, emitting `OnSessionDisposed`.
     /// Mirrors ethp2p `Channel.disposeSession`; no-op if there is no session.
     pub fn disposeSession(self: *ChannelRs, message_id: []const u8, reason: []const u8) void {
+        // Drop parked chunks first, while `message_id` is still valid (it may
+        // alias the session key we free below).
+        self.dropParked(message_id);
         if (self.sessions.fetchRemove(message_id)) |kv| {
             self.engine.config.observer.sessionDisposed(self.id, kv.key, reason);
             kv.value.deinit();
@@ -392,6 +520,14 @@ pub const ChannelRs = struct {
         return self.relayIngestChunkVerified(self.engine.dedupRegistryPtr(), message_id, peer, chunk_id, data, dedup);
     }
 };
+
+fn freeParkedList(allocator: Allocator, list: *ParkedList) void {
+    for (list.items) |pc| {
+        allocator.free(pc.peer);
+        allocator.free(pc.data);
+    }
+    list.deinit(allocator);
+}
 
 test "channel publish and drain to one member" {
     const gpa = std.testing.allocator;
@@ -582,6 +718,70 @@ test "relay session: consuming stage, reconstruct signal, drop-based disposal" {
 
     ch.disposeSession("m1", "ttl_expired");
     try std.testing.expect(ch.sessions.get("m1") == null);
+}
+
+test "parked chunks replay into the session on attach" {
+    const gpa = std.testing.allocator;
+    var rec: @import("observer.zig").Recording = .{};
+    var eng = try Engine.init(gpa, "local", .{ .observer = rec.observer() });
+    defer eng.deinit();
+    const ch = try eng.attachChannelRs("topic", sub_test_cfg);
+    try ch.addMember("peerA");
+
+    const payload = [_]u8{ 9, 8, 7 };
+    var origin = try RsStrategy.newOrigin(gpa, sub_test_cfg, &payload);
+    defer origin.deinit();
+
+    const pr = try ch.parkChunk("m1", "peerA", 0, origin.chunks[0], 100);
+    try std.testing.expectEqual(ParkResult.parked, pr);
+    try std.testing.expectEqual(@as(usize, 1), ch.parkedCount("m1"));
+
+    try ch.attachRelaySession("m1", &origin.preamble);
+    try std.testing.expectEqual(@as(usize, 0), ch.parkedCount("m1"));
+    try std.testing.expectEqual(@as(usize, 1), rec.chunk_rcvd); // replayed
+}
+
+test "parkChunk drops beyond max_parked_chunks" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.init(gpa, "local", .{});
+    defer eng.deinit();
+    const ch = try eng.attachChannelRs("topic", sub_test_cfg);
+
+    const data = [_]u8{ 1, 2, 3 };
+    var i: usize = 0;
+    while (i < max_parked_chunks) : (i += 1) {
+        try std.testing.expectEqual(ParkResult.parked, try ch.parkChunk("m1", "p", @intCast(i), &data, 0));
+    }
+    try std.testing.expectEqual(max_parked_chunks, ch.parkedCount("m1"));
+    try std.testing.expectEqual(ParkResult.dropped_full, try ch.parkChunk("m1", "p", 999, &data, 0));
+    try std.testing.expectEqual(max_parked_chunks, ch.parkedCount("m1"));
+}
+
+test "cleanup drops stale parked chunks and expired sessions" {
+    const gpa = std.testing.allocator;
+    var rec: @import("observer.zig").Recording = .{};
+    var eng = try Engine.init(gpa, "local", .{ .observer = rec.observer() });
+    defer eng.deinit();
+    const ch = try eng.attachChannelRs("topic", sub_test_cfg);
+
+    const data = [_]u8{ 1, 2, 3 };
+    _ = try ch.parkChunk("m1", "p", 0, &data, 1000);
+
+    try ch.addMember("p1");
+    const payload = [_]u8{ 'a', 'b', 'c', 'd', 'e' };
+    try ch.publish("m2", &payload);
+    ch.sessions.get("m2").?.created_at_ms = 1000;
+
+    // Fresh cleanup leaves both in place.
+    ch.cleanup(1500);
+    try std.testing.expectEqual(@as(usize, 1), ch.parkedCount("m1"));
+    try std.testing.expect(ch.sessions.get("m2") != null);
+
+    // Past both TTLs: parked chunk dropped, session disposed.
+    ch.cleanup(1000 + active_session_ttl_ms + 1);
+    try std.testing.expectEqual(@as(usize, 0), ch.parkedCount("m1"));
+    try std.testing.expect(ch.sessions.get("m2") == null);
+    try std.testing.expectEqual(@as(usize, 1), rec.session_disposed);
 }
 
 test "relay ingest registry blocks second claim same chunk index" {
