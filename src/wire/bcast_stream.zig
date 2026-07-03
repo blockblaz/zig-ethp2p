@@ -1,12 +1,32 @@
 const std = @import("std");
 const broadcast = @import("broadcast.zig");
+const constants = @import("constants.zig");
 const frame = @import("frame.zig");
 const protocol = @import("protocol.zig");
 
 pub const BcastStreamError = error{
     WrongBcastStream,
     ExpectedPeerHandshake,
+    ProtocolMismatch,
 };
+
+/// Validates a peer's advertised protocol version from the handshake, mirroring
+/// ethp2p `validateProtocolVersion` (`broadcast/peer.go`): a version above
+/// `protocol_v1` is clamped down to it, and anything not equal to `protocol_v1`
+/// is rejected with `error.ProtocolMismatch`. Returns the negotiated version.
+pub fn validateProtocolVersion(peer_version: u32) BcastStreamError!u32 {
+    var v = peer_version;
+    if (v > constants.protocol_v1) v = constants.protocol_v1;
+    if (v != constants.protocol_v1) return error.ProtocolMismatch;
+    return v;
+}
+
+test "validateProtocolVersion clamps high versions and rejects mismatches" {
+    try std.testing.expectEqual(@as(u32, 1), try validateProtocolVersion(constants.protocol_v1));
+    try std.testing.expectEqual(@as(u32, 1), try validateProtocolVersion(2)); // clamped to v1
+    try std.testing.expectEqual(@as(u32, 1), try validateProtocolVersion(99)); // clamped to v1
+    try std.testing.expectError(error.ProtocolMismatch, validateProtocolVersion(0));
+}
 
 /// Writes one length-prefixed `Bcast` frame (no selector). Matches
 /// `PeerConn.writeCtrl` / `WriteFrame` on `ctrlOut`.
