@@ -144,6 +144,7 @@ const testing = std.testing;
 pub const Recording = struct {
     session_started: usize = 0,
     session_decoded: usize = 0,
+    session_disposed: usize = 0,
     chunk_rcvd: usize = 0,
     peer_subscribed: usize = 0,
     peer_unsubscribed: usize = 0,
@@ -164,7 +165,7 @@ pub const Recording = struct {
         .onPeerGone = noop_impl.peerGone,
         .onSessionStarted = onSessionStarted,
         .onSessionDecoded = onSessionDecoded,
-        .onSessionDisposed = noop_impl.sessionDisposed,
+        .onSessionDisposed = onSessionDisposed,
         .onChunkSent = noop_impl.chunkSent,
         .onChunkRcvd = onChunkRcvd,
         .onChunkError = noop_impl.chunkError,
@@ -189,6 +190,9 @@ pub const Recording = struct {
     }
     fn onSessionDecoded(ctx: *anyopaque, _: []const u8, _: []const u8, _: i64) void {
         cast(ctx).session_decoded += 1;
+    }
+    fn onSessionDisposed(ctx: *anyopaque, _: []const u8, _: []const u8, _: []const u8) void {
+        cast(ctx).session_disposed += 1;
     }
     fn onChunkRcvd(ctx: *anyopaque, _: []const u8, _: []const u8, _: []const u8, verdict: Verdict) void {
         const self = cast(ctx);

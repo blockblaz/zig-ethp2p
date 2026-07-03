@@ -17,6 +17,26 @@ pub const SendRsChunkFn = *const fn (
     payload: []const u8,
 ) anyerror!void;
 
+/// QUIC application error code a peer's SESS stream is reset with once the
+/// session is reconstructed, telling the remote to stop sending chunks.
+/// Mirrors ethp2p `sessCodeReconstructed` (`broadcast/peer_in.go`).
+pub const sess_code_reconstructed: u64 = 0x01;
+
+/// Linear session lifecycle (ethp2p `sessionStage`). Ordering is meaningful:
+/// `stage >= .reconstructed` means "decoded" (a relay that reconstructed, or an
+/// origin that always had the payload — `.origin` sorts highest).
+pub const SessionStage = enum(u8) {
+    consuming = 0, // relay, accepting chunks
+    decoding = 1, // relay, decode running
+    reconstructed = 2, // relay, decode succeeded
+    origin = 3, // origin, has the payload from the start
+
+    /// Whether the session holds the full message (origin or reconstructed relay).
+    pub fn isDecoded(self: SessionStage) bool {
+        return @intFromEnum(self) >= @intFromEnum(SessionStage.reconstructed);
+    }
+};
+
 pub const SessionRs = struct {
     allocator: Allocator,
     /// Owned by the parent `ChannelRs` map key; not freed here.
@@ -24,12 +44,65 @@ pub const SessionRs = struct {
     strategy: RsStrategy,
     member_ids: [][]u8,
     stats: []broadcast_types.PeerSessionStats,
+    stage: SessionStage = .consuming,
+    /// Per-member flags, parallel to `member_ids` (Go tracks these in `peers`).
+    completed: []bool = &.{},
+    dropped: []bool = &.{},
+    /// Whether any peer was ever attached (Go `everHadPeers`); disposal is
+    /// gated on this so peerless sessions are left for TTL cleanup.
+    ever_had_peers: bool = false,
 
     pub fn deinit(self: *SessionRs) void {
         self.strategy.deinit();
         for (self.member_ids) |m| self.allocator.free(m);
         self.allocator.free(self.member_ids);
         self.allocator.free(self.stats);
+        self.allocator.free(self.completed);
+        self.allocator.free(self.dropped);
+    }
+
+    /// Mark the session reconstructed after a successful decode
+    /// (ethp2p `signalReconstructed`). No-op for origin sessions.
+    pub fn signalReconstructed(self: *SessionRs) void {
+        if (self.stage == .origin) return;
+        self.stage = .reconstructed;
+    }
+
+    fn peerIndex(self: *const SessionRs, peer_id: []const u8) ?usize {
+        for (self.member_ids, 0..) |m, i| {
+            if (std.mem.eql(u8, m, peer_id)) return i;
+        }
+        return null;
+    }
+
+    /// Mark a peer as having completed this session (ethp2p `handlePeerCompleted`).
+    pub fn markPeerCompleted(self: *SessionRs, peer_id: []const u8) void {
+        if (self.peerIndex(peer_id)) |i| self.completed[i] = true;
+    }
+
+    /// Mark a peer as dropped (disconnected). Dropped peers are excluded from
+    /// disposal accounting (Go removes them from the `peers` map).
+    pub fn dropPeer(self: *SessionRs, peer_id: []const u8) void {
+        if (self.peerIndex(peer_id)) |i| self.dropped[i] = true;
+    }
+
+    /// Whether the session has no remaining work and can be disposed
+    /// (ethp2p `maybeDispose`):
+    ///   - not decoded: dispose once every peer has been dropped,
+    ///   - decoded: dispose once every still-attached peer has completed.
+    /// Peerless sessions never auto-dispose (left for TTL cleanup).
+    pub fn maybeDispose(self: *const SessionRs) bool {
+        if (!self.ever_had_peers) return false;
+        if (!self.stage.isDecoded()) {
+            for (self.dropped) |d| {
+                if (!d) return false; // a live peer still needs chunks from us
+            }
+            return true;
+        }
+        for (self.completed, self.dropped) |c, d| {
+            if (!d and !c) return false; // an attached peer has not finished
+        }
+        return true;
     }
 
     /// One scheduling step: emit dispatches, then mark sends successful (simulates transport ACK).
@@ -78,3 +151,11 @@ pub const SessionRs = struct {
         return total;
     }
 };
+
+test "session stage ordering and reconstructed reset code" {
+    try std.testing.expectEqual(@as(u64, 0x01), sess_code_reconstructed);
+    try std.testing.expect(!SessionStage.consuming.isDecoded());
+    try std.testing.expect(!SessionStage.decoding.isDecoded());
+    try std.testing.expect(SessionStage.reconstructed.isDecoded());
+    try std.testing.expect(SessionStage.origin.isDecoded());
+}
