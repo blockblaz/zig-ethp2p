@@ -68,6 +68,9 @@ pub const EngineQuicHost = struct {
         defer owned.deinit(self.allocator);
         switch (owned) {
             .peer_handshake => |h| {
+                // Reject/clamp the peer's protocol version before accepting it
+                // (ethp2p `validateProtocolVersion` in the handshake reader).
+                _ = try bcast_stream.validateProtocolVersion(h.version);
                 if (self.remote_peer_id.len != 0) self.allocator.free(self.remote_peer_id);
                 self.remote_peer_id = try self.allocator.dupe(u8, h.peer_id);
             },
