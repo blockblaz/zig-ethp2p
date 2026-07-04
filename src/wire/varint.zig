@@ -1,36 +1,26 @@
+//! Multiformats / protobuf unsigned-varint, re-exported from the shared
+//! [`zig-varint`](https://github.com/ch4r10t33r/zig-varint) codec (issue #57) —
+//! the same package zquic and zig-libp2p already adopted.
+//!
+//! Thin back-compat wrapper so existing call sites keep the in-tree names
+//! (`append`, `decode`, `decodeNonNegativeI32`, `DecodeError`). The cursor
+//! decoders use the *relaxed* variant to preserve the previous in-tree
+//! decoder's tolerance of non-minimal encodings.
+
 const std = @import("std");
+const unsigned = @import("zig_varint").unsigned;
 
-pub fn append(dst: *std.ArrayList(u8), gpa: std.mem.Allocator, value: u64) std.mem.Allocator.Error!void {
-    var v = value;
-    while (v >= 0x80) {
-        try dst.append(gpa, @as(u8, @truncate(v & 0x7f | 0x80)));
-        v >>= 7;
-    }
-    try dst.append(gpa, @as(u8, @truncate(v)));
-}
+pub const DecodeError = unsigned.DecodeError;
 
-pub const DecodeError = error{ Truncated, Overflow, TooLong };
+/// Appends `value` to `dst` as an unsigned-varint.
+pub const append = unsigned.append;
 
-/// Decodes a protobuf varint; returns value and new offset.
+/// Decodes an unsigned-varint at `offset`, advancing it past the value.
 pub fn decode(buf: []const u8, offset: *usize) DecodeError!u64 {
-    var shift: u6 = 0;
-    var result: u64 = 0;
-    var i = offset.*;
-    while (i < buf.len) : (i += 1) {
-        const b = buf[i];
-        if (shift == 63 and b > 1) return error.Overflow;
-        result |= @as(u64, b & 0x7f) << shift;
-        if (b & 0x80 == 0) {
-            offset.* = i + 1;
-            return result;
-        }
-        shift += 7;
-        if (shift > 63) return error.TooLong;
-    }
-    return error.Truncated;
+    return unsigned.decodeAtRelaxed(buf, offset);
 }
 
-/// Decodes a protobuf `int32` for non-negative values (sufficient for RS preamble counts).
+/// Decodes a non-negative protobuf `int32` (sufficient for RS preamble counts).
 pub fn decodeNonNegativeI32(buf: []const u8, offset: *usize) DecodeError!i32 {
     const u = try decode(buf, offset);
     if (u > @as(u64, @intCast(std.math.maxInt(i32)))) return error.Overflow;

@@ -4,6 +4,7 @@ const Bundle = struct {
     quic_shim: *std.Build.Module,
     zquic: *std.Build.Module,
     compat: *std.Build.Module,
+    zig_varint: *std.Build.Module,
 };
 
 fn addZquicQuicModule(
@@ -13,6 +14,10 @@ fn addZquicQuicModule(
 ) Bundle {
     const zquic_pkg = b.dependency("zquic", .{ .target = target, .optimize = optimize });
     const zquic_mod = zquic_pkg.module("zquic");
+
+    // Shared multiformats/QUIC varint codec (see `src/wire/varint.zig`).
+    const zig_varint_pkg = b.dependency("zig_varint", .{ .target = target, .optimize = optimize });
+    const zig_varint_mod = zig_varint_pkg.module("zig_varint");
 
     // Zig 0.15 → 0.16 std-library compatibility shims (see `src/compat.zig`).
     const compat = b.createModule(.{
@@ -29,12 +34,13 @@ fn addZquicQuicModule(
     quic_shim.addImport("zquic", zquic_mod);
     quic_shim.addImport("compat", compat);
 
-    return .{ .quic_shim = quic_shim, .zquic = zquic_mod, .compat = compat };
+    return .{ .quic_shim = quic_shim, .zquic = zquic_mod, .compat = compat, .zig_varint = zig_varint_mod };
 }
 
 fn wireModule(m: *std.Build.Module, bundle: Bundle) void {
     m.addImport("quic", bundle.quic_shim);
     m.addImport("compat", bundle.compat);
+    m.addImport("zig_varint", bundle.zig_varint);
 }
 
 pub fn build(b: *std.Build) void {
