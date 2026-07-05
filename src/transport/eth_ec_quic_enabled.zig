@@ -161,6 +161,12 @@ pub fn dialImpl(
     const negotiated = quic.getNegotiatedAlpn(conn) orelse return error.MissingAlpn;
     if (!std.mem.eql(u8, negotiated, common.alpn_eth_ec_broadcast)) return error.AlpnMismatch;
 
+    // ConnectionStats (Go transport `ConnectionStats`): a completed handshake
+    // has moved bytes in both directions.
+    const stats = conn.connectionStats() orelse return error.NoConnStats;
+    try std.testing.expect(stats.bytes_sent > 0);
+    try std.testing.expect(stats.bytes_received > 0);
+
     quic.destroy(client_ep, conn);
 }
 

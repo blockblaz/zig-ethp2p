@@ -171,6 +171,12 @@ pub const PeerConn = struct {
         self.bcast_in = null;
         self.state = .closed;
     }
+
+    /// Total bytes sent / received on the underlying QUIC connection
+    /// (Go transport `ConnectionStats`). Null before the connection exists.
+    pub fn connectionStats(self: *const PeerConn) ?quic.ConnStats {
+        return self.conn.connectionStats();
+    }
 };
 
 /// Convenience re-export of the type accepted by `PeerConn.beginHandshake`.

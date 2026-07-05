@@ -136,6 +136,12 @@ pub const QuicEndpoint = struct {
     }
 };
 
+/// Cumulative per-connection byte counters (Go transport `ConnectionStats`).
+pub const ConnStats = struct {
+    bytes_sent: u64,
+    bytes_received: u64,
+};
+
 pub const QuicConnection = struct {
     pub const Stream = struct {
         conn: *QuicConnection,
@@ -224,6 +230,14 @@ pub const QuicConnection = struct {
         const si = self.server_slot orelse return null;
         if (srv.conns[si]) |c| return c;
         return null;
+    }
+
+    /// Total bytes sent / received on this connection (Go transport
+    /// `ConnectionStats`). Returns null before the connection has a state.
+    pub fn connectionStats(self: *const QuicConnection) ?ConnStats {
+        const cs = self.connStatePtrConst() orelse return null;
+        const s = cs.snapshotStats();
+        return .{ .bytes_sent = s.bytes_sent, .bytes_received = s.bytes_recv };
     }
 
     fn removeStreamFromLists(self: *QuicConnection, st: *Stream) void {
