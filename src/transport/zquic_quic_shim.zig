@@ -659,12 +659,46 @@ pub fn streamMakeUni(conn: *QuicConnection, poll_peer: ?*QuicEndpoint) !*QuicStr
     return qs;
 }
 
-pub fn streamCancelWrite(st: *QuicStream) void {
-    _ = st;
+fn streamResetCode(st: *const QuicStream) u64 {
+    // `reset_how` (when set) carries the application error code; default 0.
+    return if (st.reset_how) |h| @intCast(@as(u32, @bitCast(h))) else 0;
 }
 
+/// Abort the send half of `st`: send RESET_STREAM (RFC 9000 §19.4).
+/// Mirrors Go transport `CancelWrite` / `Reset`.
+pub fn streamCancelWrite(st: *QuicStream) void {
+    const conn = st.conn;
+    const code = streamResetCode(st);
+    if (conn.is_client) {
+        if (conn.client) |c| c.resetRawAppStream(st.stream_id, code);
+    } else if (conn.server) |srv| {
+        if (conn.connStatePtr()) |cs| srv.resetRawAppStream(cs, st.stream_id, code);
+    }
+}
+
+/// Cancel the receive half of `st`: send STOP_SENDING (RFC 9000 §19.5), asking
+/// the peer to stop sending (releases our receive obligation / flow-control
+/// credit). Mirrors Go transport `CancelRead`.
 pub fn streamCancelRead(st: *QuicStream) void {
-    _ = st;
+    const conn = st.conn;
+    const code = streamResetCode(st);
+    if (conn.is_client) {
+        if (conn.client) |c| c.stopSendingRawAppStream(st.stream_id, code);
+    } else if (conn.server) |srv| {
+        if (conn.connStatePtr()) |cs| srv.stopSendingRawAppStream(cs, st.stream_id, code);
+    }
+}
+
+/// If the peer reset this stream (RESET_STREAM), returns its application error
+/// code; otherwise null. Mirrors the read side of Go transport `StreamResetError`.
+pub fn streamResetReceived(st: *const QuicStream) ?u64 {
+    const conn = st.conn;
+    if (conn.is_client) {
+        const c = conn.client orelse return null;
+        return c.rawAppStreamResetReceived(st.stream_id);
+    }
+    const cs = conn.connStatePtrConst() orelse return null;
+    return io.rawAppStreamResetReceived(cs, st.stream_id);
 }
 
 pub fn streamQueueWrite(st: *QuicStream, data: []const u8) !void {
