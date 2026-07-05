@@ -15,8 +15,8 @@
     },
     .dependencies = .{
         .zquic = .{
-            .url = "https://github.com/ch4r10t33r/zquic/archive/refs/tags/v1.7.67.tar.gz",
-            .hash = "zquic-1.7.67-2zRc1PloGACyDDFuvMhnCD-mrH32qc9fFe-6gX3R1FpU",
+            .url = "https://github.com/ch4r10t33r/zquic/archive/refs/tags/v1.7.68.tar.gz",
+            .hash = "zquic-1.7.68-2zRc1F2AGAD-NYyDV5d41f0q8CgkJ1bGogPAStoku50k",
         },
         .zig_varint = .{
             .url = "https://github.com/ch4r10t33r/zig-varint/archive/refs/tags/v0.1.0.tar.gz",
