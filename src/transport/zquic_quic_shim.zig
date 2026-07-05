@@ -350,11 +350,10 @@ pub fn endpointInit(allocator: *std.mem.Allocator, bind_s: []const u8, qc: *Quic
         var la_len: posix.socklen_t = @sizeOf(compat.Address);
         try compat.getsockname(sock, &local_addr.any, &la_len);
 
-        // NOTE: `qc.max_incoming_streams` / `qc.max_incoming_uni_streams` reach
-        // here but cannot yet be applied — zquic's `io.ServerConfig` exposes no
-        // numeric incoming-stream limit (only `transport_params_preset`, whose
-        // `default` advertises `initial_max_streams_{bidi,uni} = 1000`). Honoring
-        // a custom limit needs a zquic `ServerConfig` field; tracked upstream.
+        // Advertise the configured per-connection incoming-stream limits
+        // (zquic `ServerConfig.max_incoming_*`, added in v1.7.67 → `initial_max_
+        // streams_{bidi,uni}`), so peers may open our configured number of
+        // per-chunk streams instead of the preset default (1000).
         const scfg = io.ServerConfig{
             .port = addr.getPort(),
             .cert_path = cert_abs,
@@ -363,6 +362,8 @@ pub fn endpointInit(allocator: *std.mem.Allocator, bind_s: []const u8, qc: *Quic
             .raw_application_streams = true,
             .http09 = false,
             .http3 = false,
+            .max_incoming_streams = qc.max_incoming_streams,
+            .max_incoming_uni_streams = qc.max_incoming_uni_streams,
         };
 
         const srv = try io.Server.initFromSocket(allocator.*, scfg, sock, true);
@@ -471,6 +472,8 @@ pub fn endpointInitFromFd(
         .raw_application_streams = true,
         .http09 = false,
         .http3 = false,
+        .max_incoming_streams = qc.max_incoming_streams,
+        .max_incoming_uni_streams = qc.max_incoming_uni_streams,
     };
 
     const srv = try io.Server.initFromSocket(allocator.*, scfg, sock, false);
