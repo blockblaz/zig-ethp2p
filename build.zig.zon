@@ -1,6 +1,6 @@
 .{
     .name = .zig_ethp2p,
-    .version = "0.1.0",
+    .version = "0.1.1",
     .fingerprint = 0xbeef30331296c64d,
     .minimum_zig_version = "0.16.0",
     .paths = .{
@@ -15,8 +15,8 @@
     },
     .dependencies = .{
         .zquic = .{
-            .url = "https://github.com/ch4r10t33r/zquic/archive/refs/tags/v1.7.68.tar.gz",
-            .hash = "zquic-1.7.68-2zRc1F2AGAD-NYyDV5d41f0q8CgkJ1bGogPAStoku50k",
+            .url = "https://github.com/ch4r10t33r/zquic/archive/refs/tags/v1.7.86.tar.gz",
+            .hash = "zquic-1.7.86-2zRc1I2dGQAI1M0gg19eycqe5WRZwvwJx97CECAhYreO",
         },
         .zig_varint = .{
             .url = "https://github.com/ch4r10t33r/zig-varint/archive/refs/tags/v0.1.0.tar.gz",
