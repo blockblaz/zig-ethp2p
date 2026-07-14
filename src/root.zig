@@ -48,6 +48,12 @@ pub const transport = struct {
     pub const shared_udp_socket = @import("transport/shared_udp_socket.zig");
 };
 
+/// Turnkey RS-broadcast node assembling QUIC transport + `broadcast.Engine`
+/// into a poll-driven Host (bind/connect/handshake/publish/drain/decode/deliver).
+pub const node = struct {
+    pub const broadcast_host = @import("node/broadcast_host.zig");
+};
+
 pub const broadcast = struct {
     pub const errors = @import("broadcast/errors.zig");
     pub const observer = @import("broadcast/observer.zig");
@@ -88,5 +94,6 @@ test {
     _ = broadcast.relay_async_verify;
     _ = broadcast.engine_quic;
     _ = broadcast.events;
+    _ = node.broadcast_host;
     _ = discovery;
 }
