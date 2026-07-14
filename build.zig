@@ -11,8 +11,14 @@ fn addZquicQuicModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    shadow: bool,
 ) Bundle {
-    const zquic_pkg = b.dependency("zquic", .{ .target = target, .optimize = optimize });
+    // Forward `.shadow` to zquic so this instantiation's option set matches the
+    // one zig-libp2p passes (`b.dependency("zquic", .{..., .shadow })`). Zig
+    // keys dependency deduplication on the option set, so an identical set lets
+    // a downstream that pulls both zig-ethp2p and zig-libp2p resolve a single
+    // shared zquic module instead of two colliding ones.
+    const zquic_pkg = b.dependency("zquic", .{ .target = target, .optimize = optimize, .shadow = shadow });
     const zquic_mod = zquic_pkg.module("zquic");
 
     // Shared multiformats/QUIC varint codec (see `src/wire/varint.zig`).
@@ -47,11 +53,16 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Forwarded verbatim to the zquic dependency (mirrors zig-libp2p's
+    // `-Dshadow`); keep the option name/default identical so both instantiate
+    // zquic with the same option set and Zig deduplicates it to one module.
+    const shadow = b.option(bool, "shadow", "Forward -Dshadow to the zquic dependency (Shadow simulator build)") orelse false;
+
     if (target.result.os.tag == .windows) {
         std.debug.panic("zig-ethp2p does not support Windows targets (zquic QUIC stack is tested on Unix).", .{});
     }
 
-    const bundle = addZquicQuicModule(b, target, optimize);
+    const bundle = addZquicQuicModule(b, target, optimize, shadow);
 
     const mod = b.addModule("zig_ethp2p", .{
         .root_source_file = b.path("src/root.zig"),
@@ -91,7 +102,7 @@ pub fn build(b: *std.Build) void {
     const ci_opt: std.builtin.OptimizeMode = .Debug;
     const ci_tsan = true;
 
-    const bundle_ci = addZquicQuicModule(b, ci_target, ci_opt);
+    const bundle_ci = addZquicQuicModule(b, ci_target, ci_opt, shadow);
 
     const broadcast_tests_mod = b.createModule(.{
         .root_source_file = b.path("src/ci_root_broadcast.zig"),
