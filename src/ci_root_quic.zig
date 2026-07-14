@@ -2,4 +2,5 @@
 
 test {
     _ = @import("transport/eth_ec_quic.zig");
+    _ = @import("node/broadcast_host.zig");
 }
