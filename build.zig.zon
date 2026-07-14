@@ -1,6 +1,6 @@
 .{
     .name = .zig_ethp2p,
-    .version = "0.1.2",
+    .version = "0.1.3",
     .fingerprint = 0xbeef30331296c64d,
     .minimum_zig_version = "0.16.0",
     .paths = .{
